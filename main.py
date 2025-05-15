@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from openai import OpenAI
 import psycopg2
 from psycopg2.extras import DictCursor
+import spacy
 
 # Load environment variables
 load_dotenv()
@@ -69,9 +70,9 @@ def save_user_to_db(user_id, username, first_name, last_name, language):
         cur = conn.cursor(cursor_factory=DictCursor)
         logger.info("Cursor created")
         
-        # Формируем имя пользователя
-        client_name = username or f"{first_name or ''} {last_name or ''}".strip() or str(user_id)
-        logger.info(f"Formed client_name: {client_name}")
+        # Сохраняем telegram_username отдельно
+        telegram_username = username or f"{first_name or ''} {last_name or ''}".strip() or str(user_id)
+        logger.info(f"Formed telegram_username: {telegram_username}")
         
         # Проверяем, существует ли пользователь
         check_query = "SELECT client_number FROM users WHERE telegram_user_id = %s"
@@ -84,23 +85,23 @@ def save_user_to_db(user_id, username, first_name, last_name, language):
             # Обновляем существующего пользователя
             update_query = """
                 UPDATE users 
-                SET client_name = %s, language = %s 
+                SET telegram_username = %s, language = %s 
                 WHERE telegram_user_id = %s
                 RETURNING client_number
             """
-            logger.info(f"Executing update query with params: client_name={client_name}, language={language}, user_id={user_id}")
-            cur.execute(update_query, (client_name, language, user_id))
+            logger.info(f"Executing update query with params: telegram_username={telegram_username}, language={language}, user_id={user_id}")
+            cur.execute(update_query, (telegram_username, language, user_id))
             client_number = cur.fetchone()['client_number']
             logger.info(f"Updated existing user with client_number: {client_number}")
         else:
             # Создаем нового пользователя
             insert_query = """
-                INSERT INTO users (telegram_user_id, client_name, language)
+                INSERT INTO users (telegram_user_id, telegram_username, language)
                 VALUES (%s, %s, %s)
                 RETURNING client_number
             """
-            logger.info(f"Executing insert query with params: user_id={user_id}, client_name={client_name}, language={language}")
-            cur.execute(insert_query, (user_id, client_name, language))
+            logger.info(f"Executing insert query with params: user_id={user_id}, telegram_username={telegram_username}, language={language}")
+            cur.execute(insert_query, (user_id, telegram_username, language))
             client_number = cur.fetchone()['client_number']
             logger.info(f"Created new user with client_number: {client_number}")
         
@@ -135,10 +136,14 @@ def is_this_user_allowed(user_id):
     allowed_users = os.getenv('ALLOWED_USERS', '').split(',')
     return str(user_id) in allowed_users
 
-def ask(q, chat_log=None):
+def ask(q, chat_log=None, language='en'):
     if chat_log is None:
         chat_log = start_convo.copy()
-    chat_log = chat_log + [{"role": "user", "content": q}]
+    
+    # Добавляем инструкцию о языке в промпт
+    language_instruction = f"Please respond in {language} language."
+    chat_log = chat_log + [{"role": "user", "content": f"{language_instruction}\n{q}"}]
+    
     response = client.chat.completions.create(
         model="gpt-4",
         messages=chat_log,
@@ -155,6 +160,44 @@ def append_interaction_to_chat_log(q, a, chat_log=None):
     chat_log = chat_log + [{"role": "user", "content": q}]
     chat_log = chat_log + [{"role": "assistant", "content": a}]
     return chat_log
+
+# Базовые сообщения на английском
+BASE_MESSAGES = {
+    'welcome': "I know everything about restaurants in Phuket.",
+    'choose_language': "Please choose your language or just type a message — I understand more than 120 languages and will reply in yours!",
+    'budget_question': "What price range would you prefer for the restaurant?",
+    'budget_saved': "I've saved your choice. You can always change it. Tell me what you'd like today — I'll find a perfect option and book a table for you.",
+    'current_budget': "Current price range: {}",
+    'no_budget': "Price range not selected",
+    'error': "Sorry, an error occurred. Please try again."
+}
+
+async def translate_message(message_key: str, language: str, **kwargs) -> str:
+    """
+    Переводит сообщение на нужный язык с помощью ChatGPT.
+    """
+    try:
+        # Если язык английский, возвращаем оригинальное сообщение
+        if language == 'en':
+            return BASE_MESSAGES[message_key].format(**kwargs)
+            
+        # Формируем промпт для перевода
+        prompt = f"""Translate the following English message to {language} language. 
+        Keep the same meaning and tone. If there are placeholders like {{}}, keep them in the translation.
+        Message: {BASE_MESSAGES[message_key]}"""
+        
+        response = client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,  # Низкая температура для более точного перевода
+            max_tokens=100
+        )
+        
+        translated = response.choices[0].message.content.strip()
+        return translated.format(**kwargs)
+    except Exception as e:
+        logger.error(f"Error translating message: {e}")
+        return BASE_MESSAGES[message_key].format(**kwargs)  # Возвращаем оригинальное сообщение в случае ошибки
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
@@ -250,15 +293,28 @@ async def language_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             ]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.message.reply_text(
-            "С каким средним чеком подберем ресторан?" if lang == 'ru' else "What price range would you prefer for the restaurant?",
-            reply_markup=reply_markup
-        )
+        
+        # Сообщения о выборе бюджета на разных языках
+        budget_messages = {
+            'ru': "С каким средним чеком подберем ресторан?",
+            'en': "What price range would you prefer for the restaurant?",
+            'fr': "Quelle gamme de prix préférez-vous pour le restaurant ?",
+            'ar': "ما هو نطاق السعر الذي تفضله للمطعم؟",
+            'zh': "您希望餐厅的价格范围是多少？",
+            'th': "คุณต้องการช่วงราคาของร้านอาหารเท่าไหร่?",
+            'es': "¿Qué rango de precios prefieres para el restaurante?"
+        }
+        
+        # Получаем актуальный язык пользователя
+        lang = context.user_data.get('language', 'en')
+        message = budget_messages.get(lang, budget_messages['en'])
+        
+        await query.message.reply_text(message, reply_markup=reply_markup)
         
         # Инициализируем чат с ChatGPT
         q = "Пользователь выбрал язык. Начни диалог." if lang == 'ru' else "User selected language. Start the conversation."
         try:
-            a, chat_log = ask(q, context.user_data['chat_log'])
+            a, chat_log = ask(q, context.user_data['chat_log'], lang)
             context.user_data['chat_log'] = chat_log
             logger.info("Chat initialized successfully")
         except Exception as e:
@@ -285,10 +341,12 @@ async def show_budget_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(
-        "С каким средним чеком подберем ресторан?" if context.user_data.get('language') == 'ru' else "What price range would you prefer for the restaurant?",
-        reply_markup=reply_markup
-    )
+    
+    # Получаем актуальный язык пользователя
+    lang = context.user_data.get('language', 'en')
+    message = await translate_message('budget_question', lang)
+    
+    await update.message.reply_text(message, reply_markup=reply_markup)
 
 async def budget_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
@@ -300,25 +358,73 @@ async def budget_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     # Сохраняем выбранный бюджет
     context.user_data['budget'] = budget
     
-    # Показываем сообщение о сохранении
-    message = "Запомнил ваш выбор. Его всегда можно изменить. Расскажите, что бы вам хотелось сегодня — я подберу прекрасный вариант и забронирую столик." if context.user_data.get('language') == 'ru' else "I've saved your choice. You can always change it. Tell me what you'd like today — I'll find a perfect option and book a table for you."
+    # Получаем актуальный язык пользователя
+    lang = context.user_data.get('language', 'en')
+    message = await translate_message('budget_saved', lang)
     
     # Удаляем кнопки и показываем сообщение
     await query.edit_message_text(message)
 
 async def check_budget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # Получаем актуальный язык пользователя
+    lang = context.user_data.get('language', 'en')
+    
     if 'budget' in context.user_data:
         budget = context.user_data['budget']
-        message = f"Текущий ценовой диапазон: {'$' * int(budget)}"
-        if context.user_data.get('language') != 'ru':
-            message = f"Current price range: {'$' * int(budget)}"
+        message = await translate_message('current_budget', lang, budget='$' * int(budget))
     else:
-        message = "Ценовой диапазон не выбран"
-        if context.user_data.get('language') != 'ru':
-            message = "Price range not selected"
+        message = await translate_message('no_budget', lang)
     
     await update.message.reply_text(message)
     await show_budget_buttons(update, context)
+
+# Загружаем модель для определения языка
+try:
+    nlp = spacy.load("xx_ent_wiki_sm")
+    logger.info("SpaCy language detection model loaded successfully")
+except Exception as e:
+    logger.error(f"Error loading SpaCy model: {e}")
+    nlp = None
+
+def detect_language(text):
+    """
+    Определяет язык текста с помощью ChatGPT.
+    Возвращает код языка в формате ISO 639-1.
+    """
+    try:
+        # Запрашиваем у ChatGPT определение языка
+        prompt = f"""Определи язык следующего текста и верни только код языка в формате ISO 639-1 (например, 'en' для английского, 'es' для испанского, 'ru' для русского).
+        Текст: "{text}"
+        Ответ должен содержать только код языка, без дополнительных слов или символов."""
+        
+        response = client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1,  # Низкая температура для более точного ответа
+            max_tokens=10
+        )
+        
+        lang = response.choices[0].message.content.strip().lower()
+        logger.info(f"ChatGPT detected language: {lang}")
+        
+        # Специальная обработка для языков
+        if lang in ['es', 'ca', 'gl']:  # Испанский, каталанский, галисийский
+            return 'es'
+        elif lang in ['fr', 'oc']:  # Французский, окситанский
+            return 'fr'
+        elif lang in ['ru', 'uk', 'be']:  # Русский, украинский, белорусский
+            return 'ru'
+        elif lang in ['zh', 'zh_cn', 'zh_tw']:  # Китайский
+            return 'zh'
+        elif lang in ['ar', 'fa', 'ur']:  # Арабский, персидский, урду
+            return 'ar'
+        elif lang in ['th', 'lo']:  # Тайский, лаосский
+            return 'th'
+            
+        return lang
+    except Exception as e:
+        logger.error(f"Error detecting language with ChatGPT: {e}")
+        return 'en'  # По умолчанию английский
 
 async def talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
@@ -327,57 +433,63 @@ async def talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     logger.info("Processing message from %s: %s", username, update.message.text)
 
+    text = update.message.text.strip()
+    detected_lang = detect_language(text)
+    logger.info(f"Detected language: {detected_lang}")
+
+    # Если язык отличается от сохранённого — обновляем в базе и в context
+    if context.user_data.get('language') != detected_lang:
+        context.user_data['language'] = detected_lang
+        # Обновляем язык в базе
+        try:
+            conn = get_db_connection()
+            cur = conn.cursor(cursor_factory=DictCursor)
+            cur.execute("UPDATE users SET language = %s WHERE telegram_user_id = %s", (detected_lang, user.id))
+            conn.commit()
+            cur.close()
+            conn.close()
+            logger.info(f"Updated language in DB to {detected_lang} for user {user.id}")
+        except Exception as e:
+            logger.error(f"Failed to update language in DB: {e}")
+
+    # Если это первое сообщение после старта (awaiting_language), то приветствие и кнопки
     if context.user_data.get('awaiting_language'):
-        text = update.message.text.strip()
-        # Определяем язык по первому сообщению
-        if any(c in text for c in 'абвгдеёжзийклмнопрстуфхцчшщъыьэюя'):
-            context.user_data['language'] = 'ru'
-        else:
-            context.user_data['language'] = 'en'
         context.user_data['awaiting_language'] = False
+        # Сохраняем пользователя в базу данных
+        client_number = save_user_to_db(
+            user_id=user.id,
+            username=user.username,
+            first_name=user.first_name,
+            last_name=user.last_name,
+            language=detected_lang
+        )
+        logger.info(f"User saved with client_number: {client_number}")
         
-        # Отправляем приветствие на выбранном языке
-        welcome_messages = {
-            'ru': "Я знаю о ресторанах на Пхукете всё.",
-            'en': "I know everything about restaurants in Phuket.",
-            'fr': "Je connais tout sur les restaurants de Phuket.",
-            'ar': "أعرف كل شيء عن المطاعم في بوكيت.",
-            'zh': "我了解普吉岛的所有餐厅。",
-            'th': "ผมรู้ทุกอย่างเกี่ยวกับร้านอาหารในภูเก็ต"
-        }
-        
-        welcome_message = welcome_messages.get(context.user_data['language'], welcome_messages['en'])
+        # Приветствие
+        welcome_message = await translate_message('welcome', detected_lang)
         await update.message.reply_text(welcome_message)
         
-        # Показываем кнопки выбора бюджета
-        logger.info("Showing budget buttons for user %s", username)
-        try:
-            await show_budget_buttons(update, context)
-            logger.info("Sent message with keyboard")
-        except Exception as e:
-            logger.error("Error showing budget buttons: %s", e)
-            logger.exception("Full traceback:")
+        # Кнопки бюджета
+        await show_budget_buttons(update, context)
         
-        # Инициализируем чат с ChatGPT
-        q = "Пользователь выбрал язык. Начни диалог." if context.user_data['language'] == 'ru' else "User selected language. Start the conversation."
+        # Инициализация чата с ChatGPT
+        q = "User selected language. Start the conversation."
         try:
-            a, chat_log = ask(q, context.user_data['chat_log'])
+            a, chat_log = ask(q, context.user_data['chat_log'], detected_lang)
             context.user_data['chat_log'] = chat_log
         except Exception as e:
             logger.error("Error in ask: %s", e)
         return
 
-    # Обработка обычного сообщения
+    # Все остальные сообщения — обычный диалог
     try:
-        a, chat_log = ask(update.message.text, context.user_data['chat_log'])
+        a, chat_log = ask(update.message.text, context.user_data['chat_log'], detected_lang)
         context.user_data['chat_log'] = chat_log
         await update.message.reply_text(a)
     except Exception as e:
         logger.error("Error in ask: %s", e)
-        await update.message.reply_text(
-            "Извините, произошла ошибка. Попробуйте еще раз." if context.user_data.get('language') == 'ru'
-            else "Sorry, an error occurred. Please try again."
-        )
+        error_message = await translate_message('error', detected_lang)
+        await update.message.reply_text(error_message)
 
 def main():
     app = ApplicationBuilder().token(telegram_token).build()
