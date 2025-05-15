@@ -10,10 +10,4 @@ fi
 
 # Создаем новую сессию tmux и запускаем бота
 tmux new-session -d -s booktable_bot
-tmux send-keys -t booktable_bot 'cd /root/booktable_bot && source venv/bin/activate && python3 main.py' C-m
-
-# Activate virtual environment
-source venv/bin/activate
-
-# Run the bot
-python main.py 
+tmux send-keys -t booktable_bot 'cd /root/booktable_bot && source venv/bin/activate && python3 main.py' C-m 
