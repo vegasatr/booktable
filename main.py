@@ -10,6 +10,7 @@ import psycopg2
 from psycopg2.extras import DictCursor
 from geopy.geocoders import Nominatim
 import asyncio
+from math import radians, sin, cos, sqrt, atan2
 
 # Load environment variables
 load_dotenv()
@@ -511,7 +512,28 @@ async def area_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     area_name = PHUKET_AREAS[area_id]
     context.user_data['location'] = {'area': area_id, 'name': area_name}
     
+    # Получаем координаты центра района
+    geolocator = Nominatim(user_agent="booktable_bot")
+    try:
+        location_data = geolocator.geocode(f"{area_name}, Phuket, Thailand")
+        if location_data:
+            # Сохраняем координаты в базу
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE users SET coordinates = POINT(%s, %s) WHERE telegram_user_id = %s",
+                (location_data.longitude, location_data.latitude, update.effective_user.id)
+            )
+            conn.commit()
+            cur.close()
+            conn.close()
+    except Exception as e:
+        logger.error(f"Error getting coordinates for area: {e}")
+    
     await query.message.reply_text(f"Выбран район: {area_name}")
+    
+    # Показываем отладочный список ресторанов
+    await debug_show_restaurants(update, context)
     
     # Инициализируем чат с ChatGPT
     q = f"Пользователь выбрал язык, бюджет и район {area_name}. Начни диалог." if language == 'ru' else f"User selected language, budget and area {area_name}. Start the conversation."
@@ -523,6 +545,107 @@ async def area_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         logger.error(f"Error in ask: {e}")
         error_message = await translate_message('error', language)
         await query.message.reply_text(error_message)
+
+def calculate_distance(lat1, lon1, lat2, lon2):
+    """
+    Рассчитывает расстояние между двумя точками на Земле в километрах
+    используя формулу гаверсинусов
+    """
+    R = 6371  # радиус Земли в километрах
+    
+    lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    
+    a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
+    c = 2 * atan2(sqrt(a), sqrt(1-a))
+    distance = R * c
+    
+    return distance
+
+async def debug_show_restaurants(update, context):
+    """Отладочная функция для показа подходящих ресторанов"""
+    # Получаем критерии
+    location = context.user_data.get('location')
+    budget = context.user_data.get('budget')
+    
+    # Преобразуем бюджет в диапазон
+    budget_ranges = {
+        '1': (0, 500),
+        '2': (500, 1500),
+        '3': (1500, 3000),
+        '4': (3000, 100000)
+    }
+    min_check, max_check = budget_ranges.get(str(budget), (0, 100000))
+    
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=DictCursor)
+        
+        if location == 'any':
+            # Если любое место - ищем по всему острову
+            cur.execute(
+                """SELECT name, average_check, coordinates FROM restaurants
+                WHERE average_check >= %s AND average_check <= %s AND active = true
+                ORDER BY average_check""", (min_check, max_check)
+            )
+        elif isinstance(location, dict) and 'area' in location:
+            # Если выбран район
+            cur.execute(
+                """SELECT name, average_check, coordinates FROM restaurants
+                WHERE location = %s AND average_check >= %s AND average_check <= %s AND active = true
+                ORDER BY average_check""", (location['name'], min_check, max_check)
+            )
+        elif isinstance(location, dict) and 'lat' in location and 'lon' in location:
+            # Если есть точные координаты пользователя
+            # Получаем все рестораны в радиусе 5 км
+            cur.execute(
+                """SELECT name, average_check, coordinates FROM restaurants
+                WHERE average_check >= %s AND average_check <= %s AND active = true""",
+                (min_check, max_check)
+            )
+            
+            # Фильтруем рестораны по расстоянию
+            user_lat = location['lat']
+            user_lon = location['lon']
+            nearby_restaurants = []
+            
+            for row in cur.fetchall():
+                if row['coordinates']:
+                    # Извлекаем координаты из POINT
+                    rest_lon, rest_lat = row['coordinates']
+                    distance = calculate_distance(user_lat, user_lon, rest_lat, rest_lon)
+                    if distance <= 5:  # 5 км радиус
+                        nearby_restaurants.append({
+                            'name': row['name'],
+                            'average_check': row['average_check'],
+                            'distance': round(distance, 1)
+                        })
+            
+            # Сортируем по расстоянию
+            nearby_restaurants.sort(key=lambda x: x['distance'])
+            rows = nearby_restaurants
+        else:
+            rows = []
+            
+        if not rows:
+            await update.message.reply_text("Нет подходящих ресторанов (отладка)")
+        else:
+            msg = "Подходящие рестораны (отладка):\n\n"
+            for r in rows:
+                if isinstance(r, dict) and 'distance' in r:
+                    # Если это результат поиска по радиусу
+                    msg += f"{r['name']} — {r['average_check']}฿ (в {r['distance']} км)\n"
+                else:
+                    # Если это результат поиска по району или всему острову
+                    msg += f"{r['name']} — {r['average_check']}฿\n"
+            await update.message.reply_text(msg)
+            
+        cur.close()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Error in debug_show_restaurants: {e}")
+        await update.message.reply_text(f"Ошибка поиска ресторанов: {e}")
 
 async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обработчик получения геолокации"""
@@ -540,6 +663,17 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         location_data = geolocator.reverse(f"{location.latitude}, {location.longitude}")
         if location_data:
             context.user_data['location']['address'] = location_data.address
+            
+            # Сохраняем координаты в базу
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE users SET coordinates = POINT(%s, %s) WHERE telegram_user_id = %s",
+                (location.longitude, location.latitude, update.effective_user.id)
+            )
+            conn.commit()
+            cur.close()
+            conn.close()
     except Exception as e:
         logger.error(f"Error getting address from coordinates: {e}")
     
@@ -547,6 +681,9 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         "Спасибо! Теперь я знаю ваше местоположение.",
         reply_markup=ReplyKeyboardRemove()
     )
+    
+    # Показываем отладочный список ресторанов
+    await debug_show_restaurants(update, context)
     
     # Инициализируем чат с ChatGPT
     q = "Пользователь выбрал язык, бюджет и отправил свою локацию. Начни диалог." if language == 'ru' else "User selected language, budget and sent their location. Start the conversation."

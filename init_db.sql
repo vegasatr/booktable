@@ -5,7 +5,8 @@ CREATE TABLE users (
     client_name VARCHAR(255),
     phone VARCHAR(50),
     check_preference VARCHAR(10),
-    language VARCHAR(10) NOT NULL
+    language VARCHAR(10) NOT NULL,
+    coordinates POINT
 );
 
 -- Создание таблицы Bookings
@@ -42,7 +43,7 @@ CREATE TABLE restaurants (
     discount DECIMAL(5,2),
     key_dishes TEXT[],
     michelin BOOLEAN,
-    map_link TEXT,
+    coordinates POINT,
     meal_types TEXT[],
     service_options TEXT[],
     dietary_options TEXT[],
