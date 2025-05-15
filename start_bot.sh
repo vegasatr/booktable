@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Убиваем существующий процесс бота
-pkill -f gpt-bot.py
+pkill -f main.py
 
 # Убиваем старую tmux-сессию, если она есть
 if tmux has-session -t booktable_bot 2>/dev/null; then
