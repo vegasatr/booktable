@@ -11,6 +11,10 @@ from psycopg2.extras import DictCursor
 # Load environment variables
 load_dotenv()
 
+# Читаем версию
+with open('version.txt', 'r') as f:
+    VERSION = f.read().strip()
+
 # Enable logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -20,6 +24,9 @@ logging.basicConfig(
         logging.StreamHandler()
     ]
 )
+
+logger = logging.getLogger(__name__)
+logger.info(f"Starting BookTable bot version {VERSION}")
 
 # Получаем токены из переменных окружения
 telegram_token = os.getenv('TELEGRAM_BOT_TOKEN')
@@ -148,8 +155,6 @@ def append_interaction_to_chat_log(q, a, chat_log=None):
     chat_log = chat_log + [{"role": "user", "content": q}]
     chat_log = chat_log + [{"role": "assistant", "content": a}]
     return chat_log
-
-logger = logging.getLogger(__name__)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
