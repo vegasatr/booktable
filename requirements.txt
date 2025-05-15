@@ -4,3 +4,8 @@ configparser==6.0.0
 PyYAML==6.0.1
 python-dotenv==1.0.1
 spacy==3.7.2
+psycopg2-binary==2.9.9
+aiohttp==3.9.3
+langdetect==1.0.9
+geopy==2.4.1
+pytz==2024.1
