@@ -657,7 +657,6 @@ async def show_pretty_restaurants(update, context):
                 for r in rows:
                     d = details.get(r['name'], {})
                     cuisine = d.get('cuisine') or ''
-                    # Корректно обрабатываем features
                     features = d.get('features')
                     if isinstance(features, list):
                         features = ', '.join(features)
@@ -666,6 +665,15 @@ async def show_pretty_restaurants(update, context):
                     atmosphere = d.get('atmosphere') or ''
                     story = d.get('story_or_concept') or ''
                     desc = features or atmosphere or story
+                    # Переводим cuisine и описание, если язык не английский
+                    if language != 'en':
+                        try:
+                            if cuisine:
+                                cuisine = (await translate_message('cuisine', language, cuisine=cuisine)) if 'cuisine' in BASE_MESSAGES else await ask(f"Переведи на {language}: {cuisine}", None, language)[0]
+                            if desc:
+                                desc = (await translate_message('desc', language, desc=desc)) if 'desc' in BASE_MESSAGES else await ask(f"Переведи на {language}: {desc}", None, language)[0]
+                        except Exception as e:
+                            logger.error(f"Ошибка перевода описания ресторана: {e}")
                     msg += f"• {r['name']} — {r['average_check']}\n"
                     if cuisine:
                         msg += f"{cuisine}\n"
@@ -688,19 +696,28 @@ async def show_pretty_restaurants(update, context):
                         atmosphere = d.get('atmosphere') or ''
                         story = d.get('story_or_concept') or ''
                         desc = features or atmosphere or story
+                        # Переводим cuisine и описание для AI, если язык не английский
+                        if language != 'en':
+                            try:
+                                if cuisine:
+                                    cuisine = (await translate_message('cuisine', language, cuisine=cuisine)) if 'cuisine' in BASE_MESSAGES else await ask(f"Переведи на {language}: {cuisine}", None, language)[0]
+                                if desc:
+                                    desc = (await translate_message('desc', language, desc=desc)) if 'desc' in BASE_MESSAGES else await ask(f"Переведи на {language}: {desc}", None, language)[0]
+                            except Exception as e:
+                                logger.error(f"Ошибка перевода описания ресторана для AI: {e}")
                         rest_summaries.append(f"{r['name']} — {cuisine}. {desc}")
                     rest_text = '\n'.join(rest_summaries)
                     if len(rows) == 1:
                         prompt = (
                             f"Пользователь выбрал район и бюджет, вот его история: {user_history}. "
                             f"Вот ресторан, который мы рекомендуем: {rest_text}. "
-                            f"Сделай заманчивое, мотивирующее сообщение (1-2 предложения) про этот ресторан, подчеркни его преимущества, предложи забронировать или задать вопросы. Пиши на языке пользователя ({language}), не упоминай слово 'бот', не повторяй название ресторана."
+                            f"Сделай заманчивое, мотивирующее сообщение (1-2 предложения) про этот ресторан, подчеркни его преимущества, предложи забронировать или задать вопросы. Не используй стандартные приветствия, не повторяй фразы типа 'Я знаю о ресторанах...' или 'Просто расскажите...'. Пиши на языке пользователя ({language}), не упоминай слово 'бот', не повторяй название ресторана."
                         )
                     else:
                         prompt = (
                             f"Пользователь выбрал район и бюджет, вот его история: {user_history}. "
                             f"Вот список ресторанов, которые мы рекомендуем: {rest_text}. "
-                            f"Помоги пользователю определиться с выбором, кратко подскажи отличия, предложи выбрать или задать вопросы. Пиши на языке пользователя ({language}), не упоминай слово 'бот', не повторяй названия ресторанов."
+                            f"Помоги пользователю определиться с выбором, кратко подскажи отличия, предложи выбрать или задать вопросы. Не используй стандартные приветствия, не повторяй фразы типа 'Я знаю о ресторанах...' или 'Просто расскажите...'. Пиши на языке пользователя ({language}), не упоминай слово 'бот', не повторяй названия ресторанов."
                         )
                     ai_msg, chat_log = ask(prompt, context.user_data.get('chat_log'), language)
                     context.user_data['chat_log'] = chat_log
@@ -1101,7 +1118,6 @@ async def show_other_price_callback(update: Update, context: ContextTypes.DEFAUL
             for r in rows:
                 d = details.get(r['name'], {})
                 cuisine = d.get('cuisine') or ''
-                # Корректно обрабатываем features
                 features = d.get('features')
                 if isinstance(features, list):
                     features = ', '.join(features)
@@ -1110,6 +1126,15 @@ async def show_other_price_callback(update: Update, context: ContextTypes.DEFAUL
                 atmosphere = d.get('atmosphere') or ''
                 story = d.get('story_or_concept') or ''
                 desc = features or atmosphere or story
+                # Переводим cuisine и описание, если язык не английский
+                if language != 'en':
+                    try:
+                        if cuisine:
+                            cuisine = (await translate_message('cuisine', language, cuisine=cuisine)) if 'cuisine' in BASE_MESSAGES else await ask(f"Переведи на {language}: {cuisine}", None, language)[0]
+                        if desc:
+                            desc = (await translate_message('desc', language, desc=desc)) if 'desc' in BASE_MESSAGES else await ask(f"Переведи на {language}: {desc}", None, language)[0]
+                    except Exception as e:
+                        logger.error(f"Ошибка перевода описания ресторана: {e}")
                 msg += f"• {r['name']} — {r['average_check']}\n"
                 if cuisine:
                     msg += f"{cuisine}\n"
@@ -1132,19 +1157,28 @@ async def show_other_price_callback(update: Update, context: ContextTypes.DEFAUL
                     atmosphere = d.get('atmosphere') or ''
                     story = d.get('story_or_concept') or ''
                     desc = features or atmosphere or story
+                    # Переводим cuisine и описание для AI, если язык не английский
+                    if language != 'en':
+                        try:
+                            if cuisine:
+                                cuisine = (await translate_message('cuisine', language, cuisine=cuisine)) if 'cuisine' in BASE_MESSAGES else await ask(f"Переведи на {language}: {cuisine}", None, language)[0]
+                            if desc:
+                                desc = (await translate_message('desc', language, desc=desc)) if 'desc' in BASE_MESSAGES else await ask(f"Переведи на {language}: {desc}", None, language)[0]
+                        except Exception as e:
+                            logger.error(f"Ошибка перевода описания ресторана для AI: {e}")
                     rest_summaries.append(f"{r['name']} — {cuisine}. {desc}")
                 rest_text = '\n'.join(rest_summaries)
                 if len(rows) == 1:
                     prompt = (
                         f"Пользователь выбрал район и бюджет, вот его история: {user_history}. "
                         f"Вот ресторан, который мы рекомендуем: {rest_text}. "
-                        f"Сделай заманчивое, мотивирующее сообщение (1-2 предложения) про этот ресторан, подчеркни его преимущества, предложи забронировать или задать вопросы. Пиши на языке пользователя ({language}), не упоминай слово 'бот', не повторяй название ресторана."
+                        f"Сделай заманчивое, мотивирующее сообщение (1-2 предложения) про этот ресторан, подчеркни его преимущества, предложи забронировать или задать вопросы. Не используй стандартные приветствия, не повторяй фразы типа 'Я знаю о ресторанах...' или 'Просто расскажите...'. Пиши на языке пользователя ({language}), не упоминай слово 'бот', не повторяй название ресторана."
                     )
                 else:
                     prompt = (
                         f"Пользователь выбрал район и бюджет, вот его история: {user_history}. "
                         f"Вот список ресторанов, которые мы рекомендуем: {rest_text}. "
-                        f"Помоги пользователю определиться с выбором, кратко подскажи отличия, предложи выбрать или задать вопросы. Пиши на языке пользователя ({language}), не упоминай слово 'бот', не повторяй названия ресторанов."
+                        f"Помоги пользователю определиться с выбором, кратко подскажи отличия, предложи выбрать или задать вопросы. Не используй стандартные приветствия, не повторяй фразы типа 'Я знаю о ресторанах...' или 'Просто расскажите...'. Пиши на языке пользователя ({language}), не упоминай слово 'бот', не повторяй названия ресторанов."
                     )
                 ai_msg, chat_log = ask(prompt, context.user_data.get('chat_log'), language)
                 context.user_data['chat_log'] = chat_log
