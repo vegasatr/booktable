@@ -577,6 +577,9 @@ async def debug_show_restaurants(update, context):
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=DictCursor)
         
+        logger.debug(f"Executing SQL query for location: {location}")
+        logger.debug(f"Budget range: {min_check} - {max_check}")
+        
         if location == 'any':
             # Если любое место - ищем по всему острову
             cur.execute(
@@ -584,13 +587,15 @@ async def debug_show_restaurants(update, context):
                 WHERE average_check >= %s AND average_check <= %s AND active = true
                 ORDER BY average_check""", (min_check, max_check)
             )
+            logger.debug("Executed query for any location")
         elif isinstance(location, dict) and 'area' in location:
             # Если выбран район
             cur.execute(
                 """SELECT name, average_check, coordinates FROM restaurants
-                WHERE location ILIKE %s AND average_check >= %s AND average_check <= %s AND active = true
+                WHERE (location ILIKE %s OR location ILIKE %s OR location ILIKE %s) AND average_check::integer >= %s AND average_check::integer <= %s AND active = true
                 ORDER BY average_check""", (f"%{location['name']}%", min_check, max_check)
             )
+            logger.debug(f"Executed query for area: {location['name']}")
         elif isinstance(location, dict) and 'lat' in location and 'lon' in location:
             # Если есть точные координаты пользователя
             # Получаем все рестораны в радиусе 5 км
@@ -599,6 +604,7 @@ async def debug_show_restaurants(update, context):
                 WHERE average_check >= %s AND average_check <= %s AND active = true""",
                 (min_check, max_check)
             )
+            logger.debug("Executed query for specific coordinates")
             
             # Фильтруем рестораны по расстоянию
             user_lat = location['lat']
@@ -623,6 +629,7 @@ async def debug_show_restaurants(update, context):
         else:
             rows = []
             
+        logger.debug(f"Number of restaurants found: {len(rows)}")
         if not rows:
             await update.message.reply_text("Нет подходящих ресторанов (отладка)")
         else:
@@ -640,7 +647,8 @@ async def debug_show_restaurants(update, context):
         conn.close()
     except Exception as e:
         logger.error(f"Error in debug_show_restaurants: {e}")
-        await update.message.reply_text(f"Ошибка поиска ресторанов: {e}")
+        if query.message:
+            await query.message.reply_text(f"Ошибка поиска ресторанов: {e}")
 
 async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обработчик получения геолокации"""
