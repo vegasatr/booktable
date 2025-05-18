@@ -454,17 +454,16 @@ async def location_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await context.bot.send_chat_action(chat_id=query.message.chat_id, action=ChatAction.TYPING)
         await asyncio.sleep(1)  # Добавляем небольшую задержку
         
-        # Проверяем, поддерживается ли отправка локации (workaround: если нет username, считаем десктоп)
-        if hasattr(update.effective_user, 'is_bot') and update.effective_user.is_bot:
-            await query.message.reply_text(
-                "К сожалению, отправка геолокации доступна только в мобильном приложении Telegram. Пожалуйста, выберите район из списка или укажите любое место на острове."
-            )
-            return
         # Показываем кнопку только для мобильных
-        keyboard = [[KeyboardButton("📍 Отправить локацию", request_location=True)]]
+        keyboard = [[KeyboardButton("📍 Мое местоположение", request_location=True)]]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
-        await query.message.reply_text("Пожалуйста, отправьте вашу локацию:", reply_markup=reply_markup)
-        # Убираем таймер и автосообщение для мобильных
+        await query.message.reply_text(
+            "Пожалуйста, поделитесь вашим текущим местоположением, я подберу ресторан неподалеку. Или введите район текстом.",
+            reply_markup=reply_markup
+        )
+        # Устанавливаем флаг ожидания локации или района
+        context.user_data['awaiting_location_or_area'] = True
+        return
     
     elif query.data == 'location_area':
         # Включаем эффект печатания
@@ -503,17 +502,12 @@ async def location_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             await update.message.reply_text(error_message)
 
 async def area_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обработчик выбора района"""
     query = update.callback_query
     await query.answer()
-    
     # Удаляем сообщение с кнопками выбора района
     await query.message.delete()
-    
     language = context.user_data.get('language', 'ru')
-    
-    area_id = query.data.split('_')[1].replace('-', '_')  # Исправление для корректной обработки нижнего подчеркивания
-
+    area_id = query.data.split('_')[1].replace('-', '_')
     if area_id == 'other':
         # Если выбран "Другой", просим пользователя ввести место
         other_message = "Пожалуйста, напишите название района или места, где вы хотите найти ресторан."
@@ -522,70 +516,11 @@ async def area_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await query.message.reply_text(other_message)
         context.user_data['awaiting_area_input'] = True
         return
-        
     area_name = PHUKET_AREAS[area_id]
     context.user_data['location'] = {'area': area_id, 'name': area_name}
-    
-    # Получаем координаты центра района
-    geolocator = Nominatim(user_agent="booktable_bot")
-    try:
-        location_data = geolocator.geocode(f"{area_name}, Phuket, Thailand")
-        if location_data:
-            # Сохраняем координаты в базу
-            conn = get_db_connection()
-            cur = conn.cursor()
-            cur.execute(
-                "UPDATE users SET coordinates = POINT(%s, %s) WHERE telegram_user_id = %s",
-                (location_data.longitude, location_data.latitude, update.effective_user.id)
-            )
-            conn.commit()
-            cur.close()
-            conn.close()
-    except Exception as e:
-        logger.error(f"Error getting coordinates for area: {e}")
-    
-    # Сообщаем о выбранном районе
-    await query.message.reply_text(f"Вы выбрали район: {area_name}.")
-
-    # ВРЕМЕННЫЙ ОТЛАДОЧНЫЙ ВЫВОД по average_check без фильтра по active
-    if area_name.lower() in ["равай", "rawai"]:
-        try:
-            conn = get_db_connection()
-            cur = conn.cursor(cursor_factory=DictCursor)
-            cur.execute(
-                """
-                SELECT name, average_check, location, active FROM restaurants
-                WHERE average_check = %s
-                """,
-                ("$",)
-            )
-            rows = cur.fetchall()
-            if not rows:
-                await update.effective_chat.send_message("DEBUG: В базе нет ресторанов с average_check = '$'.")
-            else:
-                msg = "DEBUG: Все рестораны с average_check = '$':\n"
-                for r in rows:
-                    msg += f"{r['name']} | {r['average_check']} | {r['location']} | active={r['active']}\n"
-                await update.effective_chat.send_message(msg)
-            cur.close()
-            conn.close()
-        except Exception as e:
-            await update.effective_chat.send_message(f"DEBUG: Ошибка при отладочном выводе: {e}")
-    # КОНЕЦ ОТЛАДОЧНОГО ВЫВОДА
-
-    # Показываем красиво оформленный список ресторанов
+    # Убираю геокодирование, обновление координат в базе и ChatGPT-диалог
+    # Показываем только список ресторанов
     await show_pretty_restaurants(update, context)
-    
-    # Инициализируем чат с ChatGPT
-    q = f"Пользователь выбрал язык, бюджет и район {area_name}. Начни диалог." if language == 'ru' else f"User selected language, budget and area {area_name}. Start the conversation."
-    try:
-        a, chat_log = ask(q, context.user_data['chat_log'], language)
-        context.user_data['chat_log'] = chat_log
-        await update.message.reply_text(a)
-    except Exception as e:
-        logger.error(f"Error in ask: {e}")
-        error_message = await translate_message('error', language)
-        await update.message.reply_text(error_message)
 
 # Новая функция для красивого вывода ресторанов
 async def show_pretty_restaurants(update, context):
@@ -604,12 +539,15 @@ async def show_pretty_restaurants(update, context):
     budget_str = budget_map.get(budget, None)
 
     # ДОП. ОТЛАДКА: выводим, что ищем
-    await update.effective_chat.send_message(f"DEBUG: budget_str={budget_str}, location={location}")
+    # await update.effective_chat.send_message(f"DEBUG: budget_str={budget_str}, location={location}")
 
     try:
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=DictCursor)
 
+        found_other_price = False
+        other_price_rows = []
+        
         if location == 'any':
             if budget_str:
                 await update.effective_chat.send_message(f"DEBUG: SQL=SELECT name, average_check FROM restaurants WHERE average_check = '{budget_str}' AND active = 'true' ORDER BY name")
@@ -617,18 +555,26 @@ async def show_pretty_restaurants(update, context):
                     "SELECT name, average_check FROM restaurants WHERE average_check = %s AND active = 'true' ORDER BY name",
                     (budget_str,)
                 )
+                rows = cur.fetchall()
+                # Проверяем, есть ли другие рестораны в других ценовых категориях
+                cur.execute(
+                    "SELECT name, average_check FROM restaurants WHERE active = 'true' AND average_check != %s ORDER BY name",
+                    (budget_str,)
+                )
+                other_price_rows = cur.fetchall()
+                found_other_price = bool(other_price_rows)
             else:
                 cur.execute(
                     "SELECT name, average_check FROM restaurants WHERE active = 'true' ORDER BY name"
                 )
-            rows = cur.fetchall()
+                rows = cur.fetchall()
         elif isinstance(location, dict) and 'area' in location:
             if budget_str:
                 smart_area = location['area'].lower().replace(' ', '').replace(',', '')
                 smart_name = location['name'].lower().replace(' ', '').replace(',', '')
-                await update.effective_chat.send_message(f"DEBUG: smart_area={smart_area}, smart_name={smart_name}")
-                await update.effective_chat.send_message(f"DEBUG: SQL=SELECT name, average_check, location FROM restaurants WHERE (REPLACE(REPLACE(LOWER(location), ' ', ''), ',', '') ILIKE %s OR REPLACE(REPLACE(LOWER(location), ' ', ''), ',', '') ILIKE %s) AND average_check::text = '{budget_str}' AND active = 'true' ORDER BY name")
-                await update.effective_chat.send_message(f"DEBUG: params=('%{smart_area}%', '%{smart_name}%', '{budget_str}')")
+                # await update.effective_chat.send_message(f"DEBUG: smart_area={smart_area}, smart_name={smart_name}")
+                # await update.effective_chat.send_message(f"DEBUG: SQL=SELECT name, average_check, location FROM restaurants WHERE (REPLACE(REPLACE(LOWER(location), ' ', ''), ',', '') ILIKE %s OR REPLACE(REPLACE(LOWER(location), ' ', ''), ',', '') ILIKE %s) AND average_check::text = '{budget_str}' AND active = 'true' ORDER BY name")
+                # await update.effective_chat.send_message(f"DEBUG: params=('%{smart_area}%', '%{smart_name}%', '{budget_str}')")
                 cur.execute(
                     """
                     SELECT name, average_check, location FROM restaurants
@@ -638,6 +584,19 @@ async def show_pretty_restaurants(update, context):
                     """,
                     (f"%{smart_area}%", f"%{smart_name}%", budget_str)
                 )
+                rows = cur.fetchall()
+                # Проверяем, есть ли другие рестораны в этом районе с другим чеком
+                cur.execute(
+                    """
+                    SELECT name, average_check, location FROM restaurants
+                    WHERE (REPLACE(REPLACE(LOWER(location), ' ', ''), ',', '') ILIKE %s OR REPLACE(REPLACE(LOWER(location), ' ', ''), ',', '') ILIKE %s)
+                    AND average_check::text != %s AND active ILIKE 'true'
+                    ORDER BY name
+                    """,
+                    (f"%{smart_area}%", f"%{smart_name}%", budget_str)
+                )
+                other_price_rows = cur.fetchall()
+                found_other_price = bool(other_price_rows)
             else:
                 smart_area = location['area'].lower().replace(' ', '').replace(',', '')
                 smart_name = location['name'].lower().replace(' ', '').replace(',', '')
@@ -650,23 +609,38 @@ async def show_pretty_restaurants(update, context):
                     """,
                     (f"%{smart_area}%", f"%{smart_name}%")
                 )
-            rows = cur.fetchall()
+                rows = cur.fetchall()
         elif isinstance(location, dict) and 'lat' in location and 'lon' in location:
             rows = []
         else:
             rows = []
 
         # Отладочный вывод результата SQL-запроса
-        debug_sql_result = f"DEBUG SQL rows: {rows}"
-        await update.effective_chat.send_message(debug_sql_result)
+        # debug_sql_result = f"DEBUG SQL rows: {rows}"
+        # await update.effective_chat.send_message(debug_sql_result)
 
-        if not rows:
+        if not rows and found_other_price and other_price_rows:
+            area_name = location['name'] if isinstance(location, dict) and 'name' in location else 'выбранном районе'
+            msg = f"Увы, но в районе {area_name} нет ресторанов со средним чеком {budget_str}, которые соответствуют высоким стандартам качества BookTable.AI. Но есть рестораны в другой ценовой категории. Посмотрите их или поищем в другом районе?\n\n"
+            for r in other_price_rows:
+                msg += f"• {r['name']} — {r['average_check']}\n"
+            keyboard = [
+                [InlineKeyboardButton("ПОСМОТРИМ", callback_data="show_other_price")],
+                [InlineKeyboardButton("ДРУГОЙ РАЙОН", callback_data="choose_area")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.effective_chat.send_message(msg, reply_markup=reply_markup)
+            return
+        elif not rows:
             msg = "К сожалению, в этом районе пока нет подходящих ресторанов по выбранным параметрам. Попробуйте выбрать другой район или изменить бюджет."
+            await update.effective_chat.send_message(msg)
+            return
         else:
             msg = "Рестораны, которые мы рекомендуем в этом районе:\n\n"
             for r in rows:
                 msg += f"• {r['name']} — {r['average_check']}\n"
-        await update.effective_chat.send_message(msg)
+            await update.effective_chat.send_message(msg)
+            return
         cur.close()
         conn.close()
     except Exception as e:
@@ -724,16 +698,12 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 conn.close()
         except Exception as e:
             logger.error(f"Error getting address from coordinates: {e}")
-        await update.message.reply_text(
-            "Спасибо! Теперь я знаю ваше местоположение.",
-            reply_markup=ReplyKeyboardRemove()
-        )
         # Определяем ближайший район
         nearest_area = get_nearest_area(location.latitude, location.longitude)
         if nearest_area:
             area_name = PHUKET_AREAS[nearest_area]
             context.user_data['location'] = {'area': nearest_area, 'name': area_name}
-            await update.message.reply_text(f"Определён район: {area_name}")
+            # await update.message.reply_text(f"Определён район: {area_name}")
             await show_pretty_restaurants(update, context)
         else:
             await update.message.reply_text("Не удалось определить район по координатам. Пожалуйста, выберите район вручную.")
@@ -808,10 +778,17 @@ async def talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     detected_lang = detect_language(text)
     logger.info(f"Detected language: {detected_lang}")
 
-    # --- ДОБАВЛЕНО: обработка ручного ввода района/локации ---
-    if context.user_data.get('awaiting_area_input'):
-        context.user_data['awaiting_area_input'] = False
-        # Получаем список всех уникальных локаций из базы
+    # --- ДОБАВЛЕНО: обработка ошибочного ввода района для любого текста ---
+    # Проверяем, не команда ли это и не про еду ли текст
+    restaurant_keywords = ['мясо', 'рыба', 'морепродукты', 'тайская', 'итальянская', 'японская', 
+                         'китайская', 'индийская', 'вегетарианская', 'веганская', 'барбекю', 
+                         'стейк', 'суши', 'паста', 'пицца', 'бургер', 'фастфуд', 'кафе', 
+                         'ресторан', 'кухня', 'еда', 'ужин', 'обед', 'завтрак', 'brunch']
+    text_lower = text.lower()
+    is_restaurant_related = any(keyword in text_lower for keyword in restaurant_keywords)
+    is_command = text_lower.startswith('/')
+    # Если это не команда и не про еду, пробуем сопоставить с районом
+    if not is_command and not is_restaurant_related and not context.user_data.get('awaiting_location_or_area') and not context.user_data.get('awaiting_area_input'):
         try:
             conn = get_db_connection()
             cur = conn.cursor()
@@ -823,7 +800,6 @@ async def talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             logger.error(f"Error fetching locations from DB: {e}")
             await update.message.reply_text("Ошибка при получении списка локаций из базы данных.")
             return
-        # Используем OpenAI для сопоставления пользовательского ввода с локациями из базы
         prompt = (
             f"Пользователь ввёл: '{text}'. Вот список всех локаций из базы данных: {all_locations}. "
             "Определи, какая локация из базы наиболее соответствует пользовательскому вводу. "
@@ -842,11 +818,21 @@ async def talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await update.message.reply_text("Ошибка при обработке локации через AI.")
             return
         if matched_location == 'NO_MATCH':
-            await update.message.reply_text("Не удалось найти подходящий район или локацию. Попробуйте ещё раз или выберите из списка.")
+            # Показываем список районов на выбор
+            areas = list(PHUKET_AREAS.items())
+            keyboard = []
+            for i in range(0, len(areas), 2):
+                row = []
+                row.append(InlineKeyboardButton(areas[i][1], callback_data=f'area_{areas[i][0]}'))
+                if i + 1 < len(areas):
+                    row.append(InlineKeyboardButton(areas[i+1][1], callback_data=f'area_{areas[i+1][0]}'))
+                keyboard.append(row)
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text("Пожалуйста, выберите район из списка:", reply_markup=reply_markup)
             return
         # Сохраняем найденную локацию и ищем рестораны
         context.user_data['location'] = {'area': matched_location, 'name': matched_location}
-        await update.message.reply_text(f"Вы выбрали локацию: {matched_location}")
+        await update.message.reply_text(f"Отлично, поищем в районе {matched_location}. Что бы вам хотелось сегодня покушать? Я подберу прекрасный вариант и забронирую столик.")
         await show_pretty_restaurants(update, context)
         return
     # --- КОНЕЦ ДОБАВЛЕНИЯ ---
@@ -907,9 +893,9 @@ async def talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if is_restaurant_related:
             # Показываем кнопки выбора локации в одну строку
             keyboard = [[
-                InlineKeyboardButton("РЯДОМ СО МНОЙ", callback_data='location_near'),
-                InlineKeyboardButton("ВЫБРАТЬ РАЙОН", callback_data='location_area'),
-                InlineKeyboardButton("ЛЮБОЕ МЕСТО", callback_data='location_any')
+                InlineKeyboardButton("РЯДОМ", callback_data='location_near'),
+                InlineKeyboardButton("РАЙОН", callback_data='location_area'),
+                InlineKeyboardButton("ВЕЗДЕ", callback_data='location_any')
             ]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
@@ -969,6 +955,23 @@ async def set_bot_commands(app):
     ])
     await app.bot.set_chat_menu_button(menu_button=MenuButtonCommands())
 
+async def choose_area_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    # Удаляем сообщение с кнопками
+    await query.message.delete()
+    # Показываем выбор района
+    areas = list(PHUKET_AREAS.items())
+    keyboard = []
+    for i in range(0, len(areas), 2):
+        row = []
+        row.append(InlineKeyboardButton(areas[i][1], callback_data=f'area_{areas[i][0]}'))
+        if i + 1 < len(areas):
+            row.append(InlineKeyboardButton(areas[i+1][1], callback_data=f'area_{areas[i+1][0]}'))
+        keyboard.append(row)
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await query.message.reply_text("Выберите район из списка или напишите мне более точное место", reply_markup=reply_markup)
+
 def main():
     app = ApplicationBuilder().token(telegram_token).build()
     
@@ -982,6 +985,7 @@ def main():
     app.add_handler(CallbackQueryHandler(budget_callback, pattern="^budget_"))
     app.add_handler(CallbackQueryHandler(location_callback, pattern="^location_"))
     app.add_handler(CallbackQueryHandler(area_callback, pattern="^area_"))
+    app.add_handler(CallbackQueryHandler(choose_area_callback, pattern="^choose_area$"))
     
     # Обработчики сообщений
     app.add_handler(MessageHandler(filters.LOCATION, handle_location))
