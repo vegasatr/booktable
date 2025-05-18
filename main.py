@@ -972,6 +972,57 @@ async def choose_area_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.message.reply_text("Выберите район из списка или напишите мне более точное место", reply_markup=reply_markup)
 
+# --- Новый обработчик для кнопки "ПОСМОТРИМ" ---
+async def show_other_price_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    # Удаляем сообщение с кнопками
+    try:
+        await query.message.delete()
+    except Exception as e:
+        logger.error(f"Ошибка при удалении сообщения с кнопками: {e}")
+    location = context.user_data.get('location')
+    budget = context.user_data.get('budget')
+    language = context.user_data.get('language', 'ru')
+    # Для строкового фильтра по бюджету
+    budget_map = {
+        '1': '$',
+        '2': '$$',
+        '3': '$$$',
+        '4': '$$$$'
+    }
+    budget_str = budget_map.get(budget, None)
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=DictCursor)
+        if isinstance(location, dict) and 'area' in location:
+            smart_area = location['area'].lower().replace(' ', '').replace(',', '')
+            smart_name = location['name'].lower().replace(' ', '').replace(',', '')
+            cur.execute(
+                """
+                SELECT name, average_check, location FROM restaurants
+                WHERE (REPLACE(REPLACE(LOWER(location), ' ', ''), ',', '') ILIKE %s OR REPLACE(REPLACE(LOWER(location), ' ', ''), ',', '') ILIKE %s)
+                AND average_check::text != %s AND active ILIKE 'true'
+                ORDER BY name
+                """,
+                (f"%{smart_area}%", f"%{smart_name}%", budget_str)
+            )
+            rows = cur.fetchall()
+            if not rows:
+                await update.effective_chat.send_message("В этом районе нет ресторанов в других ценовых категориях. Попробуйте выбрать другой район.")
+                return
+            msg = "Рестораны в этом районе с другим средним чеком:\n\n"
+            for r in rows:
+                msg += f"• {r['name']} — {r['average_check']}\n"
+            await update.effective_chat.send_message(msg)
+        else:
+            await update.effective_chat.send_message("Ошибка: не удалось определить район для поиска ресторанов.")
+        cur.close()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Ошибка в show_other_price_callback: {e}")
+        await update.effective_chat.send_message(f"Ошибка поиска ресторанов: {e}")
+
 def main():
     app = ApplicationBuilder().token(telegram_token).build()
     
@@ -986,6 +1037,8 @@ def main():
     app.add_handler(CallbackQueryHandler(location_callback, pattern="^location_"))
     app.add_handler(CallbackQueryHandler(area_callback, pattern="^area_"))
     app.add_handler(CallbackQueryHandler(choose_area_callback, pattern="^choose_area$"))
+    # Новый обработчик для кнопки ПОСМОТРИМ
+    app.add_handler(CallbackQueryHandler(show_other_price_callback, pattern="^show_other_price$"))
     
     # Обработчики сообщений
     app.add_handler(MessageHandler(filters.LOCATION, handle_location))
