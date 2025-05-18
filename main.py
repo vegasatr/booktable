@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 import logging, os, uuid, json
-from telegram import Update, ForceReply, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from telegram import Update, ForceReply, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, MenuButtonCommands
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters, CallbackQueryHandler
 from telegram.constants import ChatAction
 from dotenv import load_dotenv
@@ -11,6 +11,7 @@ from psycopg2.extras import DictCursor
 from geopy.geocoders import Nominatim
 import asyncio
 from math import radians, sin, cos, sqrt, atan2
+import traceback
 
 # Load environment variables
 load_dotenv()
@@ -185,6 +186,19 @@ PHUKET_AREAS = {
     'nai_harn': 'Най Харн',
     'bang_tao': 'Банг Тао',
     'other': 'Другой'
+}
+
+# Координаты центров районов Пхукета (примерные)
+PHUKET_AREAS_COORDS = {
+    'chalong': (7.8314, 98.3381),
+    'patong': (7.8966, 98.2965),
+    'kata': (7.8210, 98.2943),
+    'karon': (7.8486, 98.2948),
+    'phuket_town': (7.8804, 98.3923),
+    'kamala': (7.9506, 98.2807),
+    'rawai': (7.7796, 98.3281),
+    'nai_harn': (7.7726, 98.3166),
+    'bang_tao': (7.9936, 98.2933)
 }
 
 # Базовые сообщения на английском
@@ -440,29 +454,17 @@ async def location_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await context.bot.send_chat_action(chat_id=query.message.chat_id, action=ChatAction.TYPING)
         await asyncio.sleep(1)  # Добавляем небольшую задержку
         
-        # Проверяем, является ли клиент десктопным
-        if update.effective_user.is_bot or not update.effective_user.is_premium:
+        # Проверяем, поддерживается ли отправка локации (workaround: если нет username, считаем десктоп)
+        if hasattr(update.effective_user, 'is_bot') and update.effective_user.is_bot:
             await query.message.reply_text(
-                "К сожалению, отправка геолокации доступна только в мобильном приложении Telegram. "
-                "Пожалуйста, выберите район из списка или укажите любое место на острове."
+                "К сожалению, отправка геолокации доступна только в мобильном приложении Telegram. Пожалуйста, выберите район из списка или укажите любое место на острове."
             )
-            # Показываем кнопки районов
-            areas = list(PHUKET_AREAS.items())
-            keyboard = []
-            for i in range(0, len(areas), 2):
-                row = []
-                row.append(InlineKeyboardButton(areas[i][1], callback_data=f'area_{areas[i][0]}'))
-                if i + 1 < len(areas):
-                    row.append(InlineKeyboardButton(areas[i+1][1], callback_data=f'area_{areas[i+1][0]}'))
-                keyboard.append(row)
-            
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await query.message.reply_text("Выберите район из списка или напишите мне более точное место", reply_markup=reply_markup)
             return
-            
-        keyboard = [[KeyboardButton("Отправить мою локацию", request_location=True)]]
-        reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
+        # Показываем кнопку только для мобильных
+        keyboard = [[KeyboardButton("📍 Отправить локацию", request_location=True)]]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
         await query.message.reply_text("Пожалуйста, отправьте вашу локацию:", reply_markup=reply_markup)
+        # Убираем таймер и автосообщение для мобильных
     
     elif query.data == 'location_area':
         # Включаем эффект печатания
@@ -671,54 +673,89 @@ async def show_pretty_restaurants(update, context):
         logger.error(f"Error in show_pretty_restaurants: {e}")
         await update.effective_chat.send_message(f"Ошибка поиска ресторанов: {e}")
 
+def get_nearest_area(lat, lon):
+    min_dist = float('inf')
+    nearest_area = None
+    for area, (alat, alon) in PHUKET_AREAS_COORDS.items():
+        dlat = radians(lat - alat)
+        dlon = radians(lon - alon)
+        a = sin(dlat/2)**2 + cos(radians(lat)) * cos(radians(alat)) * sin(dlon/2)**2
+        c = 2 * atan2(sqrt(a), sqrt(1-a))
+        dist = 6371 * c  # расстояние в км
+        if dist < min_dist:
+            min_dist = dist
+            nearest_area = area
+    return nearest_area
+
 async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обработчик получения геолокации"""
-    location = update.message.location
-    context.user_data['location'] = {
-        'lat': location.latitude,
-        'lon': location.longitude
-    }
-    
-    language = context.user_data.get('language', 'en')
-    
-    # Получаем адрес по координатам
-    geolocator = Nominatim(user_agent="booktable_bot")
     try:
-        location_data = geolocator.reverse(f"{location.latitude}, {location.longitude}")
-        if location_data:
-            context.user_data['location']['address'] = location_data.address
-            
-            # Сохраняем координаты в базу
-            conn = get_db_connection()
-            cur = conn.cursor()
-            cur.execute(
-                "UPDATE users SET coordinates = POINT(%s, %s) WHERE telegram_user_id = %s",
-                (location.longitude, location.latitude, update.effective_user.id)
-            )
-            conn.commit()
-            cur.close()
-            conn.close()
+        logger.info(f"handle_location вызван. update.message: {update.message}")
+        # Удаляем отладочный вывод пользователю
+        # await update.message.reply_text(f"DEBUG: update.message={update.message}")
+        if not hasattr(update.message, 'location') or update.message.location is None:
+            error_text = "Похоже, вы не разрешили Telegram доступ к геолокации. Пожалуйста, включите доступ к геолокации для Telegram в настройках телефона и попробуйте ещё раз."
+            if update.message:
+                await update.message.reply_text(error_text)
+            else:
+                await context.bot.send_message(chat_id=update.effective_user.id, text=error_text)
+            return
+        location = update.message.location
+        context.user_data['location'] = {
+            'lat': location.latitude,
+            'lon': location.longitude
+        }
+        context.user_data['location_received'] = True
+        language = context.user_data.get('language', 'en')
+        # Получаем адрес по координатам
+        geolocator = Nominatim(user_agent="booktable_bot")
+        try:
+            location_data = geolocator.reverse(f"{location.latitude}, {location.longitude}")
+            if location_data:
+                context.user_data['location']['address'] = location_data.address
+                # Сохраняем координаты в базу
+                conn = get_db_connection()
+                cur = conn.cursor()
+                cur.execute(
+                    "UPDATE users SET coordinates = POINT(%s, %s), user_coords = %s WHERE telegram_user_id = %s",
+                    (location.longitude, location.latitude, f"{location.latitude},{location.longitude}", update.effective_user.id)
+                )
+                conn.commit()
+                cur.close()
+                conn.close()
+        except Exception as e:
+            logger.error(f"Error getting address from coordinates: {e}")
+        await update.message.reply_text(
+            "Спасибо! Теперь я знаю ваше местоположение.",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        # Определяем ближайший район
+        nearest_area = get_nearest_area(location.latitude, location.longitude)
+        if nearest_area:
+            area_name = PHUKET_AREAS[nearest_area]
+            context.user_data['location'] = {'area': nearest_area, 'name': area_name}
+            await update.message.reply_text(f"Определён район: {area_name}")
+            await show_pretty_restaurants(update, context)
+        else:
+            await update.message.reply_text("Не удалось определить район по координатам. Пожалуйста, выберите район вручную.")
+        # Убираю вызов debug_show_restaurants и лишние отладочные сообщения
+        # Инициализируем чат с ChatGPT
+        q = "Пользователь выбрал язык, бюджет и отправил свою локацию. Начни диалог." if language == 'ru' else "User selected language, budget and sent their location. Start the conversation."
+        try:
+            a, chat_log = ask(q, context.user_data['chat_log'], language)
+            context.user_data['chat_log'] = chat_log
+            await update.message.reply_text(a)
+        except Exception as e:
+            logger.error(f"Error in ask: {e}")
+            error_message = await translate_message('error', language)
+            await update.message.reply_text(error_message)
     except Exception as e:
-        logger.error(f"Error getting address from coordinates: {e}")
-    
-    await update.message.reply_text(
-        "Спасибо! Теперь я знаю ваше местоположение.",
-        reply_markup=ReplyKeyboardRemove()
-    )
-    
-    # Показываем отладочный список ресторанов
-    await debug_show_restaurants(update, context)
-    
-    # Инициализируем чат с ChatGPT
-    q = "Пользователь выбрал язык, бюджет и отправил свою локацию. Начни диалог." if language == 'ru' else "User selected language, budget and sent their location. Start the conversation."
-    try:
-        a, chat_log = ask(q, context.user_data['chat_log'], language)
-        context.user_data['chat_log'] = chat_log
-        await update.message.reply_text(a)
-    except Exception as e:
-        logger.error(f"Error in ask: {e}")
-        error_message = await translate_message('error', language)
-        await update.message.reply_text(error_message)
+        tb = traceback.format_exc()
+        logger.error(f"Ошибка при получении локации: {e}\n{tb}")
+        error_text = f"Ошибка при получении локации: {e}\n{tb}\nПожалуйста, попробуйте ещё раз или выберите район вручную."
+        if update.message:
+            await update.message.reply_text(error_text)
+        else:
+            await context.bot.send_message(chat_id=update.effective_user.id, text=error_text)
 
 def detect_language(text):
     """
@@ -919,12 +956,20 @@ async def check_budget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     
     await update.message.reply_text(message)
 
+async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Перезапуск бота: сброс состояния и стартовое приветствие"""
+    # Сброс всех пользовательских данных
+    context.user_data.clear()
+    # Приветственное сообщение и меню, как при /start
+    await start(update, context)
+
 def main():
     app = ApplicationBuilder().token(telegram_token).build()
     
     # Базовые команды
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("check", check_budget))
+    app.add_handler(CommandHandler("restart", restart))
+    app.add_handler(CommandHandler("filter", check_budget))
     
     # Обработчики callback-запросов
     app.add_handler(CallbackQueryHandler(language_callback, pattern="^lang_"))
@@ -935,6 +980,13 @@ def main():
     # Обработчики сообщений
     app.add_handler(MessageHandler(filters.LOCATION, handle_location))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, talk))
+    
+    # Устанавливаем меню команд
+    app.bot.set_my_commands([
+        ("restart", "Перезапустить бота"),
+        ("filter", "Показать текущие фильтры поиска")
+    ])
+    app.bot.set_chat_menu_button(menu_button=MenuButtonCommands())
     
     # Запуск бота
     app.run_polling()

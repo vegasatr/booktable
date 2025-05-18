@@ -1,0 +1,73 @@
+ id |            name             |           location            
+----+-----------------------------+-------------------------------
+  1 | WeCafe Chaofa               | Wichit, Chaofa
+  2 | WeCafe Rawai                | Rawai, Mueang Phuket District
+  3 | WeCafe Mueang               | Mueang Phuket District
+  4 | WeCafe Chalong              | Chalong, Mueang Phuket
+  5 | Etna                        | Bang Tao
+  6 | Woo                         | Bang Tao
+  7 | Shaman                      | Bang Tao
+  8 | Bartels Bang Tao            | Bang Tao
+  9 | Bartels Blue Tree           | Blue Tree
+ 10 | La Maree                    | Bang Tao
+ 11 | Eden by the Lake            | Bang Tao
+ 12 | d'ODESSA                    | Bang Tao
+ 13 | Cafe del Mar                | Kamala
+ 14 | Tree Bay                    | Ao Yon
+ 15 | PRU                         | Cherngtalay, Thalang
+ 16 | Red Tomato                  | Chalong
+ 17 | Kin-Kub-Ei                  | Phuket Town
+ 18 | Krua Baan Platong           | Ko Kaeo
+ 19 | Meesapam Khun Yai Chian     | Phuket Town
+ 20 | Sang Ka Sri                 | Talat Nuea
+ 21 | hom                         | Muang District
+ 22 | Tiffin by La Sala           | Laguna
+ 23 | Nitan                       | Rawai
+ 24 | Jampa                       | Cherngtalay
+ 25 | Chom Chan                   | Phuket Old Town
+ 26 | Loba Bang Niao              | Talad Yai
+ 27 | Tambu                       | Patong
+ 28 | Ta Khai                     | Kamala
+ 29 | Mook Manee                  | Phuket Town
+ 30 | Jaras                       | Cherngtalay
+ 31 | Samut                       | Rawai
+ 32 | Talung Thai                 | Karon
+ 33 | The Thai Library            | Patong
+ 34 | One Chun                    | Phuket Old Town
+ 35 | Blue Elephant               | Phuket Town
+ 36 | The Charm Dining Gallery    | Phuket Old Town
+ 37 | Jadjan                      | Phuket Town
+ 38 | Krua Kao Kuk                | Phuket Town
+ 39 | Naam Yoi                    | Phuket Town
+ 40 | Go Ang Seafood              | Phuket Town
+ 41 | La Gaetana                  | Phuket Town
+ 42 | Hong Khao Tom Pla           | Phuket Town
+ 43 | Go La                       | Phuket Town
+ 44 | O Tao Bang Niao             | Phuket Town
+ 45 | Raya                        | Phuket Town
+ 46 | Tu Kab Khao                 | Phuket Town
+ 47 | Ka Jok See                  | Phuket Town
+ 48 | Suay Restaurant             | Cherngtalay
+ 49 | Baan Rim Pa                 | Patong Beach
+ 50 | La Gritta                   | Patong Beach
+ 51 | Mom Tri's Kitchen           | Kata Noi Beach
+ 52 | Kan Eang@Pier               | Chalong Bay
+ 53 | Sea Hag Restaurant          | Patong Beach
+ 54 | Dibuk Restaurant            | Phuket Town
+ 55 | L'Arôme by the Sea          | Kalim Beach
+ 56 | Acqua                       | Patong Beach
+ 57 | Heh                         | Cherngtalay
+ 58 | Surf & Turf by Soul Kitchen | Phuket Town
+ 59 | Chuan Chim                  | Phuket Town
+ 60 | Jongjit Kitchen             | Phuket Town
+ 61 | Mor Mu Dong                 | Chalong
+ 62 | Buabok                      | Phuket Town
+ 63 | Toh Daeng                   | Phuket Town
+ 64 | Roti Chaofa                 | Phuket Town
+ 65 | Shrimp Noodles Ao Kae       | Phuket Town
+ 66 | Khrua Ohm                   | Phuket Town
+ 67 | A Pong Mae Sunee            | Phuket Town
+ 68 | Peang-Prai                  | Phuket Town
+ 69 | Wagyu Steakhouse            | Cherngtalay
+(69 rows)
+

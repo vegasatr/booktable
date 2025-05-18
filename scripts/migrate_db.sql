@@ -25,4 +25,7 @@ UPDATE users SET telegram_username = client_name WHERE telegram_username IS NULL
 
 -- Очищаем поле client_name, так как оно будет заполняться позже
 -- при первом заказе пользователя
-UPDATE users SET client_name = NULL; 
+UPDATE users SET client_name = NULL;
+
+-- Добавить поле user_coords для хранения координат пользователя в формате 'lat,lon'
+ALTER TABLE users ADD COLUMN user_coords TEXT; 
