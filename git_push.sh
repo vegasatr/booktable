@@ -22,39 +22,15 @@
 CURRENT_VERSION=$(cat version.txt)
 echo "Current version: $CURRENT_VERSION"
 
-# Запрашиваем тип изменений
-echo "Select type of changes:"
-echo "1) Bug fix (patch version)"
-echo "2) New feature (minor version)"
-echo "3) Breaking changes (major version)"
-read -p "Enter choice (1-3): " choice
-
-# Обновляем версию
+# Автоматически обновляем версию
 IFS='.' read -r major minor patch <<< "$CURRENT_VERSION"
-case $choice in
-    1)
-        patch=$((patch + 1))
-        ;;
-    2)
-        minor=$((minor + 1))
-        patch=0
-        ;;
-    3)
-        major=$((major + 1))
-        minor=0
-        patch=0
-        ;;
-    *)
-        echo "Invalid choice"
-        exit 1
-        ;;
-esac
+patch=$((patch + 1))  # Всегда увеличиваем патч-версию
 
 NEW_VERSION="$major.$minor.$patch"
 echo "New version will be: $NEW_VERSION"
 
-# Запрашиваем описание изменений
-read -p "Enter commit message: " commit_message
+# Формируем описание изменений
+commit_message="Automated update: changes made in version $NEW_VERSION"
 
 # Обновляем версию в файле
 echo "$NEW_VERSION" > version.txt
@@ -62,6 +38,11 @@ echo "$NEW_VERSION" > version.txt
 # Добавляем изменения в git
 git add .
 git commit -m "$commit_message (v$NEW_VERSION)"
-git push origin main
+
+# Создаем новую ветку с номером версии
+BRANCH_NAME="v$NEW_VERSION"
+git checkout -b "$BRANCH_NAME"
+
+git push origin "$BRANCH_NAME"
 
 echo "Changes pushed to GitHub with version $NEW_VERSION" 

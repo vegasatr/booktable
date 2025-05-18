@@ -148,13 +148,21 @@ def ask(q, chat_log=None, language='en'):
     language_instruction = f"Please respond in {language} language."
     chat_log = chat_log + [{"role": "user", "content": f"{language_instruction}\n{q}"}]
     
+    # Формируем промпт для ChatGPT
+    prompt = f"Пользователь спросил: '{q}'. Если речь идет о ресторанах, верни системный ответ в формате ### и перечисли ключевые аспекты через запятую."
+    chat_log = chat_log + [{"role": "user", "content": prompt}]
+    
+    logger.debug(f"Sending prompt to ChatGPT: {chat_log}")
+    
     response = client.chat.completions.create(
         model="gpt-4",
         messages=chat_log,
         temperature=0.7,
         max_tokens=1000
     )
+    
     answer = response.choices[0].message.content
+    logger.debug(f"Received response from ChatGPT: {answer}")
     chat_log = chat_log + [{"role": "assistant", "content": answer}]
     return answer, chat_log
 
@@ -168,7 +176,6 @@ def append_interaction_to_chat_log(q, a, chat_log=None):
 # Список районов Пхукета
 PHUKET_AREAS = {
     'chalong': 'Чалонг',
-    'festival': 'Фестиваль',
     'patong': 'Паттонг',
     'kata': 'Ката',
     'karon': 'Карон',
@@ -177,7 +184,6 @@ PHUKET_AREAS = {
     'rawai': 'Равай',
     'nai_harn': 'Най Харн',
     'bang_tao': 'Банг Тао',
-    'surin': 'Сурин',
     'other': 'Другой'
 }
 
@@ -306,7 +312,7 @@ async def language_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         
         # Отправляем приветствие на выбранном языке
         welcome_messages = {
-            'ru': "Я знаю о ресторанах на Пхукете всё.",
+            'ru': "Я знаю о ресторанах на Пхукете всё.",  # Возвращаем строку в приветственное сообщение
             'en': "I know everything about restaurants in Phuket.",
             'fr': "Je connais tout sur les restaurants de Phuket.",
             'ar': "أعرف كل شيء عن المطاعم في بوكيت.",
@@ -424,6 +430,9 @@ async def location_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     query = update.callback_query
     await query.answer()
     
+    # Удаляем сообщение с кнопками выбора локации
+    await query.message.delete()
+    
     language = context.user_data.get('language', 'en')
     
     if query.data == 'location_near':
@@ -496,10 +505,13 @@ async def area_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     query = update.callback_query
     await query.answer()
     
+    # Удаляем сообщение с кнопками выбора района
+    await query.message.delete()
+    
     language = context.user_data.get('language', 'en')
     
-    area_id = query.data.split('_')[1]
-    
+    area_id = query.data.split('_')[1].replace('-', '_')  # Исправление для корректной обработки нижнего подчеркивания
+
     if area_id == 'other':
         # Если выбран "Другой", просим пользователя ввести место
         other_message = "Пожалуйста, напишите название района или места, где вы хотите найти ресторан."
@@ -540,11 +552,11 @@ async def area_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     try:
         a, chat_log = ask(q, context.user_data['chat_log'], language)
         context.user_data['chat_log'] = chat_log
-        await query.message.reply_text(a)
+        await update.message.reply_text(a)
     except Exception as e:
         logger.error(f"Error in ask: {e}")
         error_message = await translate_message('error', language)
-        await query.message.reply_text(error_message)
+        await update.message.reply_text(error_message)
 
 def calculate_distance(lat1, lon1, lat2, lon2):
     """
@@ -571,12 +583,12 @@ async def debug_show_restaurants(update, context):
     
     # Преобразуем бюджет в диапазон
     budget_ranges = {
-        '1': (0, 500),
-        '2': (500, 1500),
-        '3': (1500, 3000),
-        '4': (3000, 100000)
+        '$': (0, 500),
+        '$$': (500, 1500),
+        '$$$': (1500, 3000),
+        '$$$$': (3000, 100000)
     }
-    min_check, max_check = budget_ranges.get(str(budget), (0, 100000))
+    min_check, max_check = budget_ranges.get(budget, (0, 100000))
     
     try:
         conn = get_db_connection()
@@ -593,8 +605,8 @@ async def debug_show_restaurants(update, context):
             # Если выбран район
             cur.execute(
                 """SELECT name, average_check, coordinates FROM restaurants
-                WHERE location = %s AND average_check >= %s AND average_check <= %s AND active = true
-                ORDER BY average_check""", (location['name'], min_check, max_check)
+                WHERE location ILIKE %s AND average_check >= %s AND average_check <= %s AND active = true
+                ORDER BY average_check""", (f"%{location['name']}%", min_check, max_check)
             )
         elif isinstance(location, dict) and 'lat' in location and 'lon' in location:
             # Если есть точные координаты пользователя
@@ -800,27 +812,30 @@ async def talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         text_lower = text.lower()
         is_restaurant_related = any(keyword in text_lower for keyword in restaurant_keywords)
         
-        if not is_restaurant_related:
-            # Если ответ не о ресторанах - используем ChatGPT
-            try:
-                a, chat_log = ask(text, context.user_data['chat_log'], detected_lang)
-                context.user_data['chat_log'] = chat_log
-                await update.message.reply_text(a)
-            except Exception as e:
-                logger.error(f"Error in ask: {e}")
-                error_message = await translate_message('error', detected_lang)
-                await update.message.reply_text(error_message)
-        
-        # В любом случае показываем кнопки выбора локации в одну строку
-        keyboard = [[
-            InlineKeyboardButton("РЯДОМ СО МНОЙ", callback_data='location_near'),
-            InlineKeyboardButton("ВЫБРАТЬ РАЙОН", callback_data='location_area'),
-            InlineKeyboardButton("ЛЮБОЕ МЕСТО", callback_data='location_any')
-        ]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        location_message = "Прекрасно, подберу для Вас отличный ресторан! Поискать поблизости, в другом районе или в любом месте на Пхукете?"
-        await update.message.reply_text(location_message, reply_markup=reply_markup)
+        if is_restaurant_related:
+            # Показываем кнопки выбора локации в одну строку
+            keyboard = [[
+                InlineKeyboardButton("РЯДОМ СО МНОЙ", callback_data='location_near'),
+                InlineKeyboardButton("ВЫБРАТЬ РАЙОН", callback_data='location_area'),
+                InlineKeyboardButton("ЛЮБОЕ МЕСТО", callback_data='location_any')
+            ]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            location_message = "Подберу для Вас отличный ресторан! Поискать поблизости, в другом районе или в любом месте на Пхукете?"
+            await update.message.reply_text(location_message, reply_markup=reply_markup)
+            return
+
+        # Если ответ не о ресторанах - используем ChatGPT для создания уникального ответа
+        try:
+            # Используем более гибкий и контекстуальный запрос для ChatGPT
+            flexible_prompt = f"Пользователь спросил: '{text}'. Ответь остроумно и вежливо, затем плавно верни разговор к бронированию ресторана."
+            a, chat_log = ask(flexible_prompt, context.user_data['chat_log'], detected_lang)
+            context.user_data['chat_log'] = chat_log
+            await update.message.reply_text(a)
+        except Exception as e:
+            logger.error(f"Error in ask: {e}")
+            error_message = await translate_message('error', detected_lang)
+            await update.message.reply_text(error_message)
         return
 
     # Все остальные сообщения — обычный диалог
