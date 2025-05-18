@@ -963,6 +963,12 @@ async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # Приветственное сообщение и меню, как при /start
     await start(update, context)
 
+async def set_bot_commands(app):
+    await app.bot.set_my_commands([
+        ("restart", "Перезапустить бота")
+    ])
+    await app.bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+
 def main():
     app = ApplicationBuilder().token(telegram_token).build()
     
@@ -981,13 +987,8 @@ def main():
     app.add_handler(MessageHandler(filters.LOCATION, handle_location))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, talk))
     
-    # Устанавливаем меню команд
-    app.bot.set_my_commands([
-        ("restart", "Перезапустить бота"),
-        ("filter", "Показать текущие фильтры поиска")
-    ])
-    app.bot.set_chat_menu_button(menu_button=MenuButtonCommands())
-    
+    # Устанавливаем команды и меню после запуска
+    app.post_init = set_bot_commands
     # Запуск бота
     app.run_polling()
 
