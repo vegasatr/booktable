@@ -669,8 +669,10 @@ async def show_pretty_restaurants(update, context):
                     if language != 'en':
                         try:
                             if cuisine:
+                                await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
                                 cuisine = (await ask(f"Переведи на {language} (только тип кухни, без лишних слов): {cuisine}", None, language))[0]
                             if desc:
+                                await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
                                 desc = (await ask(f"Переведи на {language} (только краткое описание ресторана, без лишних слов): {desc}", None, language))[0]
                         except Exception as e:
                             logger.error(f"Ошибка перевода описания ресторана: {e}")
@@ -683,6 +685,7 @@ async def show_pretty_restaurants(update, context):
                 await update.effective_chat.send_message(msg)
                 # AI-комментарий
                 try:
+                    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
                     user_history = context.user_data.get('chat_log', [])
                     user_wish = context.user_data.get('last_user_wish', '')
                     rest_summaries = []
@@ -701,8 +704,10 @@ async def show_pretty_restaurants(update, context):
                         if language != 'en':
                             try:
                                 if cuisine:
+                                    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
                                     cuisine = (await ask(f"Переведи на {language} (только тип кухни, без лишних слов): {cuisine}", None, language))[0]
                                 if desc:
+                                    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
                                     desc = (await ask(f"Переведи на {language} (только краткое описание ресторана, без лишних слов): {desc}", None, language))[0]
                             except Exception as e:
                                 logger.error(f"Ошибка перевода описания ресторана: {e}")
@@ -1131,8 +1136,10 @@ async def show_other_price_callback(update: Update, context: ContextTypes.DEFAUL
                 if language != 'en':
                     try:
                         if cuisine:
+                            await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
                             cuisine = (await ask(f"Переведи на {language} (только тип кухни, без лишних слов): {cuisine}", None, language))[0]
                         if desc:
+                            await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
                             desc = (await ask(f"Переведи на {language} (только краткое описание ресторана, без лишних слов): {desc}", None, language))[0]
                     except Exception as e:
                         logger.error(f"Ошибка перевода описания ресторана: {e}")
@@ -1145,6 +1152,7 @@ async def show_other_price_callback(update: Update, context: ContextTypes.DEFAUL
             await update.effective_chat.send_message(msg)
             # AI-комментарий
             try:
+                await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
                 user_history = context.user_data.get('chat_log', [])
                 user_wish = context.user_data.get('last_user_wish', '')
                 rest_summaries = []
@@ -1163,8 +1171,10 @@ async def show_other_price_callback(update: Update, context: ContextTypes.DEFAUL
                     if language != 'en':
                         try:
                             if cuisine:
+                                await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
                                 cuisine = (await ask(f"Переведи на {language} (только тип кухни, без лишних слов): {cuisine}", None, language))[0]
                             if desc:
+                                await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
                                 desc = (await ask(f"Переведи на {language} (только краткое описание ресторана, без лишних слов): {desc}", None, language))[0]
                         except Exception as e:
                             logger.error(f"Ошибка перевода описания ресторана: {e}")
