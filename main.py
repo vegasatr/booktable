@@ -24,7 +24,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.DEBUG,  # Меняем уровень на DEBUG
     handlers=[
-        logging.FileHandler("bot.log"),
+        logging.FileHandler("logs/bot.log"),
         logging.StreamHandler()
     ]
 )
@@ -244,7 +244,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     # Первое приветственное сообщение
     await update.message.reply_text(
-        'Hello and welcome to BookTable.AI!\n'
+        f'Hello and welcome to BookTable.AI v{VERSION}!\n'
         'I will help you find the perfect restaurant in Phuket and book a table in seconds.'
     )
 
@@ -558,23 +558,6 @@ async def area_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         error_message = await translate_message('error', language)
         await update.message.reply_text(error_message)
 
-def calculate_distance(lat1, lon1, lat2, lon2):
-    """
-    Рассчитывает расстояние между двумя точками на Земле в километрах
-    используя формулу гаверсинусов
-    """
-    R = 6371  # радиус Земли в километрах
-    
-    lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
-    dlat = lat2 - lat1
-    dlon = lon2 - lon1
-    
-    a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
-    c = 2 * atan2(sqrt(a), sqrt(1-a))
-    distance = R * c
-    
-    return distance
-
 async def debug_show_restaurants(update, context):
     """Отладочная функция для показа подходящих ресторанов"""
     # Получаем критерии
@@ -583,10 +566,10 @@ async def debug_show_restaurants(update, context):
     
     # Преобразуем бюджет в диапазон
     budget_ranges = {
-        '$': (0, 500),
-        '$$': (500, 1500),
-        '$$$': (1500, 3000),
-        '$$$$': (3000, 100000)
+        '1': (0, 500),
+        '2': (500, 1500),
+        '3': (1500, 3000),
+        '4': (3000, 100000)
     }
     min_check, max_check = budget_ranges.get(budget, (0, 100000))
     
