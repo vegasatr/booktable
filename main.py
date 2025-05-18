@@ -725,6 +725,8 @@ async def show_pretty_restaurants(update, context):
                         )
                     ai_msg, chat_log = ask(prompt, context.user_data.get('chat_log'), language)
                     context.user_data['chat_log'] = chat_log
+                    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+                    await asyncio.sleep(1)
                     await update.effective_chat.send_message(ai_msg)
                 except Exception as e:
                     logger.error(f"Ошибка генерации AI-комментария: {e}")
@@ -976,6 +978,9 @@ async def talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         text = update.message.text.strip()
         detected_lang = detect_language(text)
         try:
+            # Эффект печатания сразу после получения сообщения
+            await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.TYPING)
+            await asyncio.sleep(1)
             # Первый строгий промпт
             prompt = (
                 f"Пользователь написал: '{text}'. "
@@ -1003,6 +1008,9 @@ async def talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                     await update.message.reply_text(location_message, reply_markup=reply_markup)
                     return
             if '###' not in answer and 'NO_PREFS' not in answer:
+                # Эффект печатания перед повторным запросом
+                await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.TYPING)
+                await asyncio.sleep(1)
                 strict_prompt = (
                     f"Пользователь написал: '{text}'. "
                     f"Верни только одну строку: либо '### предпочтения', либо 'NO_PREFS'. Никаких других слов, пояснений, приветствий, только одна строка. Пиши на языке пользователя ({detected_lang})."
@@ -1028,6 +1036,8 @@ async def talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                         await update.message.reply_text(location_message, reply_markup=reply_markup)
                         return
             # Если не найдено предпочтений — болтовня, флаг не сбрасываем
+            await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.TYPING)
+            await asyncio.sleep(1)
             flexible_prompt = f"Пользователь написал: '{text}'. Ответь остроумно, дружелюбно, но мягко верни разговор к выбору ресторана. Не используй шаблонные фразы, не повторяй приветствие. Пиши на языке пользователя ({detected_lang})."
             a, chat_log = ask(flexible_prompt, context.user_data['chat_log'], detected_lang)
             context.user_data['chat_log'] = chat_log
@@ -1048,6 +1058,8 @@ async def talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await asyncio.sleep(1)
         a, chat_log = ask(update.message.text, context.user_data['chat_log'], detected_lang)
         context.user_data['chat_log'] = chat_log
+        await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.TYPING)
+        await asyncio.sleep(1)
         await update.message.reply_text(a)
     except Exception as e:
         logger.error("Error in ask: %s", e)
@@ -1226,6 +1238,8 @@ async def show_other_price_callback(update: Update, context: ContextTypes.DEFAUL
                     )
                 ai_msg, chat_log = ask(prompt, context.user_data.get('chat_log'), language)
                 context.user_data['chat_log'] = chat_log
+                await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+                await asyncio.sleep(1)
                 await update.effective_chat.send_message(ai_msg)
             except Exception as e:
                 logger.error(f"Ошибка генерации AI-комментария: {e}")
