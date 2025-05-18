@@ -643,15 +643,15 @@ async def show_pretty_restaurants(update, context):
                 # Формируем SQL для получения кухни и описания
                 cur2 = conn.cursor(cursor_factory=DictCursor)
                 names = tuple([r['name'] for r in rows])
-                if len(names) == 1:
-                    names_sql = f"('{names[0]}')"
-                else:
-                    names_sql = str(names)
-                cur2.execute(f"""
+                # Используем параметризованный запрос для избежания ошибок с апострофами
+                cur2.execute(
+                    """
                     SELECT name, average_check, cuisine, features, atmosphere, story_or_concept
                     FROM restaurants
-                    WHERE name IN {names_sql}
-                """)
+                    WHERE name IN %s
+                    """,
+                    (names,)
+                )
                 details = {r['name']: r for r in cur2.fetchall()}
                 msg = "Рестораны, которые мы рекомендуем в этом районе:\n\n"
                 for r in rows:
@@ -1073,15 +1073,15 @@ async def show_other_price_callback(update: Update, context: ContextTypes.DEFAUL
             # Получаем подробную информацию о ресторанах
             cur2 = conn.cursor(cursor_factory=DictCursor)
             names = tuple([r['name'] for r in rows])
-            if len(names) == 1:
-                names_sql = f"('{names[0]}')"
-            else:
-                names_sql = str(names)
-            cur2.execute(f"""
+            # Используем параметризованный запрос для избежания ошибок с апострофами
+            cur2.execute(
+                """
                 SELECT name, average_check, cuisine, features, atmosphere, story_or_concept
                 FROM restaurants
-                WHERE name IN {names_sql}
-            """)
+                WHERE name IN %s
+                """,
+                (names,)
+            )
             details = {r['name']: r for r in cur2.fetchall()}
             msg = "Рестораны в этом районе с другим средним чеком:\n\n"
             for r in rows:
