@@ -657,7 +657,12 @@ async def show_pretty_restaurants(update, context):
                 for r in rows:
                     d = details.get(r['name'], {})
                     cuisine = d.get('cuisine') or ''
-                    features = ', '.join(d.get('features', []) or [])
+                    # Корректно обрабатываем features
+                    features = d.get('features')
+                    if isinstance(features, list):
+                        features = ', '.join(features)
+                    elif features is None:
+                        features = ''
                     atmosphere = d.get('atmosphere') or ''
                     story = d.get('story_or_concept') or ''
                     desc = features or atmosphere or story
@@ -670,24 +675,33 @@ async def show_pretty_restaurants(update, context):
                 await update.effective_chat.send_message(msg)
                 # AI-комментарий
                 try:
-                    # Собираем контекст для AI
                     user_history = context.user_data.get('chat_log', [])
-                    # Формируем краткое описание ресторанов для AI
                     rest_summaries = []
                     for r in rows:
                         d = details.get(r['name'], {})
                         cuisine = d.get('cuisine') or ''
-                        features = ', '.join(d.get('features', []) or [])
+                        features = d.get('features')
+                        if isinstance(features, list):
+                            features = ', '.join(features)
+                        elif features is None:
+                            features = ''
                         atmosphere = d.get('atmosphere') or ''
                         story = d.get('story_or_concept') or ''
                         desc = features or atmosphere or story
                         rest_summaries.append(f"{r['name']} — {cuisine}. {desc}")
                     rest_text = '\n'.join(rest_summaries)
-                    prompt = (
-                        f"Пользователь выбрал район и бюджет, вот его история: {user_history}. "
-                        f"Вот список ресторанов, которые мы рекомендуем: {rest_text}. "
-                        f"Сделай короткое (1-2 предложения) дружелюбное сообщение для пользователя, учитывая его предыдущие пожелания и особенности этих ресторанов. Пиши на языке пользователя ({language}), не упоминай слово 'бот', не повторяй названия ресторанов."
-                    )
+                    if len(rows) == 1:
+                        prompt = (
+                            f"Пользователь выбрал район и бюджет, вот его история: {user_history}. "
+                            f"Вот ресторан, который мы рекомендуем: {rest_text}. "
+                            f"Сделай заманчивое, мотивирующее сообщение (1-2 предложения) про этот ресторан, подчеркни его преимущества, предложи забронировать или задать вопросы. Пиши на языке пользователя ({language}), не упоминай слово 'бот', не повторяй название ресторана."
+                        )
+                    else:
+                        prompt = (
+                            f"Пользователь выбрал район и бюджет, вот его история: {user_history}. "
+                            f"Вот список ресторанов, которые мы рекомендуем: {rest_text}. "
+                            f"Помоги пользователю определиться с выбором, кратко подскажи отличия, предложи выбрать или задать вопросы. Пиши на языке пользователя ({language}), не упоминай слово 'бот', не повторяй названия ресторанов."
+                        )
                     ai_msg, chat_log = ask(prompt, context.user_data.get('chat_log'), language)
                     context.user_data['chat_log'] = chat_log
                     await update.effective_chat.send_message(ai_msg)
@@ -1087,7 +1101,12 @@ async def show_other_price_callback(update: Update, context: ContextTypes.DEFAUL
             for r in rows:
                 d = details.get(r['name'], {})
                 cuisine = d.get('cuisine') or ''
-                features = ', '.join(d.get('features', []) or [])
+                # Корректно обрабатываем features
+                features = d.get('features')
+                if isinstance(features, list):
+                    features = ', '.join(features)
+                elif features is None:
+                    features = ''
                 atmosphere = d.get('atmosphere') or ''
                 story = d.get('story_or_concept') or ''
                 desc = features or atmosphere or story
@@ -1105,17 +1124,28 @@ async def show_other_price_callback(update: Update, context: ContextTypes.DEFAUL
                 for r in rows:
                     d = details.get(r['name'], {})
                     cuisine = d.get('cuisine') or ''
-                    features = ', '.join(d.get('features', []) or [])
+                    features = d.get('features')
+                    if isinstance(features, list):
+                        features = ', '.join(features)
+                    elif features is None:
+                        features = ''
                     atmosphere = d.get('atmosphere') or ''
                     story = d.get('story_or_concept') or ''
                     desc = features or atmosphere or story
                     rest_summaries.append(f"{r['name']} — {cuisine}. {desc}")
                 rest_text = '\n'.join(rest_summaries)
-                prompt = (
-                    f"Пользователь выбрал район и бюджет, вот его история: {user_history}. "
-                    f"Вот список ресторанов, которые мы рекомендуем: {rest_text}. "
-                    f"Сделай короткое (1-2 предложения) дружелюбное сообщение для пользователя, учитывая его предыдущие пожелания и особенности этих ресторанов. Пиши на языке пользователя ({language}), не упоминай слово 'бот', не повторяй названия ресторанов."
-                )
+                if len(rows) == 1:
+                    prompt = (
+                        f"Пользователь выбрал район и бюджет, вот его история: {user_history}. "
+                        f"Вот ресторан, который мы рекомендуем: {rest_text}. "
+                        f"Сделай заманчивое, мотивирующее сообщение (1-2 предложения) про этот ресторан, подчеркни его преимущества, предложи забронировать или задать вопросы. Пиши на языке пользователя ({language}), не упоминай слово 'бот', не повторяй название ресторана."
+                    )
+                else:
+                    prompt = (
+                        f"Пользователь выбрал район и бюджет, вот его история: {user_history}. "
+                        f"Вот список ресторанов, которые мы рекомендуем: {rest_text}. "
+                        f"Помоги пользователю определиться с выбором, кратко подскажи отличия, предложи выбрать или задать вопросы. Пиши на языке пользователя ({language}), не упоминай слово 'бот', не повторяй названия ресторанов."
+                    )
                 ai_msg, chat_log = ask(prompt, context.user_data.get('chat_log'), language)
                 context.user_data['chat_log'] = chat_log
                 await update.effective_chat.send_message(ai_msg)
