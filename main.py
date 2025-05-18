@@ -508,7 +508,7 @@ async def area_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     # Удаляем сообщение с кнопками выбора района
     await query.message.delete()
     
-    language = context.user_data.get('language', 'en')
+    language = context.user_data.get('language', 'ru')
     
     area_id = query.data.split('_')[1].replace('-', '_')  # Исправление для корректной обработки нижнего подчеркивания
 
@@ -542,10 +542,37 @@ async def area_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     except Exception as e:
         logger.error(f"Error getting coordinates for area: {e}")
     
-    await query.message.reply_text(f"Выбран район: {area_name}")
-    
-    # Показываем отладочный список ресторанов
-    await debug_show_restaurants(update, context)
+    # Сообщаем о выбранном районе
+    await query.message.reply_text(f"Вы выбрали район: {area_name}.")
+
+    # ВРЕМЕННЫЙ ОТЛАДОЧНЫЙ ВЫВОД по average_check без фильтра по active
+    if area_name.lower() in ["равай", "rawai"]:
+        try:
+            conn = get_db_connection()
+            cur = conn.cursor(cursor_factory=DictCursor)
+            cur.execute(
+                """
+                SELECT name, average_check, location, active FROM restaurants
+                WHERE average_check = %s
+                """,
+                ("$",)
+            )
+            rows = cur.fetchall()
+            if not rows:
+                await update.effective_chat.send_message("DEBUG: В базе нет ресторанов с average_check = '$'.")
+            else:
+                msg = "DEBUG: Все рестораны с average_check = '$':\n"
+                for r in rows:
+                    msg += f"{r['name']} | {r['average_check']} | {r['location']} | active={r['active']}\n"
+                await update.effective_chat.send_message(msg)
+            cur.close()
+            conn.close()
+        except Exception as e:
+            await update.effective_chat.send_message(f"DEBUG: Ошибка при отладочном выводе: {e}")
+    # КОНЕЦ ОТЛАДОЧНОГО ВЫВОДА
+
+    # Показываем красиво оформленный список ресторанов
+    await show_pretty_restaurants(update, context)
     
     # Инициализируем чат с ChatGPT
     q = f"Пользователь выбрал язык, бюджет и район {area_name}. Начни диалог." if language == 'ru' else f"User selected language, budget and area {area_name}. Start the conversation."
@@ -558,97 +585,91 @@ async def area_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         error_message = await translate_message('error', language)
         await update.message.reply_text(error_message)
 
-async def debug_show_restaurants(update, context):
-    """Отладочная функция для показа подходящих ресторанов"""
-    # Получаем критерии
+# Новая функция для красивого вывода ресторанов
+async def show_pretty_restaurants(update, context):
+    """Показывает красиво оформленный список подходящих ресторанов"""
     location = context.user_data.get('location')
     budget = context.user_data.get('budget')
-    
-    # Преобразуем бюджет в диапазон
-    budget_ranges = {
-        '1': (0, 500),
-        '2': (500, 1500),
-        '3': (1500, 3000),
-        '4': (3000, 100000)
+    language = context.user_data.get('language', 'ru')
+
+    # Для строкового фильтра по бюджету
+    budget_map = {
+        '1': '$',
+        '2': '$$',
+        '3': '$$$',
+        '4': '$$$$'
     }
-    min_check, max_check = budget_ranges.get(budget, (0, 100000))
-    
+    budget_str = budget_map.get(budget, None)
+
+    # ДОП. ОТЛАДКА: выводим, что ищем
+    await update.effective_chat.send_message(f"DEBUG: budget_str={budget_str}, location={location}")
+
     try:
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=DictCursor)
-        
-        logger.debug(f"Executing SQL query for location: {location}")
-        logger.debug(f"Budget range: {min_check} - {max_check}")
-        
+
         if location == 'any':
-            # Если любое место - ищем по всему острову
-            cur.execute(
-                """SELECT name, average_check, coordinates FROM restaurants
-                WHERE average_check >= %s AND average_check <= %s AND active = true
-                ORDER BY average_check""", (min_check, max_check)
-            )
-            logger.debug("Executed query for any location")
+            if budget_str:
+                await update.effective_chat.send_message(f"DEBUG: SQL=SELECT name, average_check FROM restaurants WHERE average_check = '{budget_str}' AND active = 'true' ORDER BY name")
+                cur.execute(
+                    "SELECT name, average_check FROM restaurants WHERE average_check = %s AND active = 'true' ORDER BY name",
+                    (budget_str,)
+                )
+            else:
+                cur.execute(
+                    "SELECT name, average_check FROM restaurants WHERE active = 'true' ORDER BY name"
+                )
+            rows = cur.fetchall()
         elif isinstance(location, dict) and 'area' in location:
-            # Если выбран район
-            cur.execute(
-                """SELECT name, average_check, coordinates FROM restaurants
-                WHERE (location ILIKE %s OR location ILIKE %s OR location ILIKE %s) AND average_check::integer >= %s AND average_check::integer <= %s AND active = true
-                ORDER BY average_check""", (f"%{location['name']}%", min_check, max_check)
-            )
-            logger.debug(f"Executed query for area: {location['name']}")
+            if budget_str:
+                smart_area = location['area'].lower().replace(' ', '').replace(',', '')
+                smart_name = location['name'].lower().replace(' ', '').replace(',', '')
+                await update.effective_chat.send_message(f"DEBUG: smart_area={smart_area}, smart_name={smart_name}")
+                await update.effective_chat.send_message(f"DEBUG: SQL=SELECT name, average_check, location FROM restaurants WHERE (REPLACE(REPLACE(LOWER(location), ' ', ''), ',', '') ILIKE %s OR REPLACE(REPLACE(LOWER(location), ' ', ''), ',', '') ILIKE %s) AND average_check::text = '{budget_str}' AND active = 'true' ORDER BY name")
+                await update.effective_chat.send_message(f"DEBUG: params=('%{smart_area}%', '%{smart_name}%', '{budget_str}')")
+                cur.execute(
+                    """
+                    SELECT name, average_check, location FROM restaurants
+                    WHERE (REPLACE(REPLACE(LOWER(location), ' ', ''), ',', '') ILIKE %s OR REPLACE(REPLACE(LOWER(location), ' ', ''), ',', '') ILIKE %s)
+                    AND average_check::text = %s AND active ILIKE 'true'
+                    ORDER BY name
+                    """,
+                    (f"%{smart_area}%", f"%{smart_name}%", budget_str)
+                )
+            else:
+                smart_area = location['area'].lower().replace(' ', '').replace(',', '')
+                smart_name = location['name'].lower().replace(' ', '').replace(',', '')
+                cur.execute(
+                    """
+                    SELECT name, average_check, location FROM restaurants
+                    WHERE (REPLACE(REPLACE(LOWER(location), ' ', ''), ',', '') ILIKE %s OR REPLACE(REPLACE(LOWER(location), ' ', ''), ',', '') ILIKE %s)
+                    AND active ILIKE 'true'
+                    ORDER BY name
+                    """,
+                    (f"%{smart_area}%", f"%{smart_name}%")
+                )
+            rows = cur.fetchall()
         elif isinstance(location, dict) and 'lat' in location and 'lon' in location:
-            # Если есть точные координаты пользователя
-            # Получаем все рестораны в радиусе 5 км
-            cur.execute(
-                """SELECT name, average_check, coordinates FROM restaurants
-                WHERE average_check >= %s AND average_check <= %s AND active = true""",
-                (min_check, max_check)
-            )
-            logger.debug("Executed query for specific coordinates")
-            
-            # Фильтруем рестораны по расстоянию
-            user_lat = location['lat']
-            user_lon = location['lon']
-            nearby_restaurants = []
-            
-            for row in cur.fetchall():
-                if row['coordinates']:
-                    # Извлекаем координаты из POINT
-                    rest_lon, rest_lat = row['coordinates']
-                    distance = calculate_distance(user_lat, user_lon, rest_lat, rest_lon)
-                    if distance <= 5:  # 5 км радиус
-                        nearby_restaurants.append({
-                            'name': row['name'],
-                            'average_check': row['average_check'],
-                            'distance': round(distance, 1)
-                        })
-            
-            # Сортируем по расстоянию
-            nearby_restaurants.sort(key=lambda x: x['distance'])
-            rows = nearby_restaurants
+            rows = []
         else:
             rows = []
-            
-        logger.debug(f"Number of restaurants found: {len(rows)}")
+
+        # Отладочный вывод результата SQL-запроса
+        debug_sql_result = f"DEBUG SQL rows: {rows}"
+        await update.effective_chat.send_message(debug_sql_result)
+
         if not rows:
-            await update.message.reply_text("Нет подходящих ресторанов (отладка)")
+            msg = "К сожалению, в этом районе пока нет подходящих ресторанов по выбранным параметрам. Попробуйте выбрать другой район или изменить бюджет."
         else:
-            msg = "Подходящие рестораны (отладка):\n\n"
+            msg = "Рестораны, которые мы рекомендуем в этом районе:\n\n"
             for r in rows:
-                if isinstance(r, dict) and 'distance' in r:
-                    # Если это результат поиска по радиусу
-                    msg += f"{r['name']} — {r['average_check']}฿ (в {r['distance']} км)\n"
-                else:
-                    # Если это результат поиска по району или всему острову
-                    msg += f"{r['name']} — {r['average_check']}฿\n"
-            await update.message.reply_text(msg)
-            
+                msg += f"• {r['name']} — {r['average_check']}\n"
+        await update.effective_chat.send_message(msg)
         cur.close()
         conn.close()
     except Exception as e:
-        logger.error(f"Error in debug_show_restaurants: {e}")
-        if query.message:
-            await query.message.reply_text(f"Ошибка поиска ресторанов: {e}")
+        logger.error(f"Error in show_pretty_restaurants: {e}")
+        await update.effective_chat.send_message(f"Ошибка поиска ресторанов: {e}")
 
 async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обработчик получения геолокации"""
@@ -749,6 +770,49 @@ async def talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = update.message.text.strip()
     detected_lang = detect_language(text)
     logger.info(f"Detected language: {detected_lang}")
+
+    # --- ДОБАВЛЕНО: обработка ручного ввода района/локации ---
+    if context.user_data.get('awaiting_area_input'):
+        context.user_data['awaiting_area_input'] = False
+        # Получаем список всех уникальных локаций из базы
+        try:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute("SELECT DISTINCT location FROM restaurants WHERE location IS NOT NULL AND location != ''")
+            all_locations = [row[0] for row in cur.fetchall()]
+            cur.close()
+            conn.close()
+        except Exception as e:
+            logger.error(f"Error fetching locations from DB: {e}")
+            await update.message.reply_text("Ошибка при получении списка локаций из базы данных.")
+            return
+        # Используем OpenAI для сопоставления пользовательского ввода с локациями из базы
+        prompt = (
+            f"Пользователь ввёл: '{text}'. Вот список всех локаций из базы данных: {all_locations}. "
+            "Определи, какая локация из базы наиболее соответствует пользовательскому вводу. "
+            "Верни только точное значение из списка, без пояснений. Если ничего не подходит, верни 'NO_MATCH'."
+        )
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=50
+            )
+            matched_location = response.choices[0].message.content.strip()
+        except Exception as e:
+            logger.error(f"Error in OpenAI location match: {e}")
+            await update.message.reply_text("Ошибка при обработке локации через AI.")
+            return
+        if matched_location == 'NO_MATCH':
+            await update.message.reply_text("Не удалось найти подходящий район или локацию. Попробуйте ещё раз или выберите из списка.")
+            return
+        # Сохраняем найденную локацию и ищем рестораны
+        context.user_data['location'] = {'area': matched_location, 'name': matched_location}
+        await update.message.reply_text(f"Вы выбрали локацию: {matched_location}")
+        await show_pretty_restaurants(update, context)
+        return
+    # --- КОНЕЦ ДОБАВЛЕНИЯ ---
 
     # Если язык отличается от сохранённого — обновляем в базе и в context
     if context.user_data.get('language') != detected_lang:
