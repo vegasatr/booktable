@@ -141,27 +141,23 @@ def is_this_user_allowed(user_id):
     allowed_users = os.getenv('ALLOWED_USERS', '').split(',')
     return str(user_id) in allowed_users
 
-def ask(q, chat_log=None, language='en'):
+def ask(q, chat_log=None, language='en', add_default_prompt=True):
     if chat_log is None:
         chat_log = start_convo.copy()
-    
     # Добавляем инструкцию о языке в промпт
     language_instruction = f"Please respond in {language} language."
     chat_log = chat_log + [{"role": "user", "content": f"{language_instruction}\n{q}"}]
-    
-    # Формируем промпт для ChatGPT
-    prompt = f"Пользователь спросил: '{q}'. Если речь идет о ресторанах, верни системный ответ в формате ### и перечисли ключевые аспекты через запятую."
-    chat_log = chat_log + [{"role": "user", "content": prompt}]
-    
+    # Формируем промпт для ChatGPT только если явно нужно
+    if add_default_prompt:
+        prompt = f"Пользователь спросил: '{q}'. Если речь идет о ресторанах, верни системный ответ в формате ### и перечисли ключевые аспекты через запятую."
+        chat_log = chat_log + [{"role": "user", "content": prompt}]
     logger.debug(f"Sending prompt to ChatGPT: {chat_log}")
-    
     response = client.chat.completions.create(
         model="gpt-4",
         messages=chat_log,
         temperature=0.7,
         max_tokens=1000
     )
-    
     answer = response.choices[0].message.content
     logger.debug(f"Received response from ChatGPT: {answer}")
     chat_log = chat_log + [{"role": "assistant", "content": answer}]
@@ -872,6 +868,10 @@ async def talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     logger.info("Processing message from %s: %s", username, update.message.text)
 
+    # DEBUG: выводим состояние context.user_data в Telegram
+    debug_state = " | ".join([f"{k}={v}" for k, v in context.user_data.items()])
+    # await update.message.reply_text(f"DEBUG: state: {debug_state}")
+
     text = update.message.text.strip()
     detected_lang = detect_language(text)
     logger.info(f"Detected language: {detected_lang}")
@@ -886,7 +886,7 @@ async def talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     is_restaurant_related = any(keyword in text_lower for keyword in restaurant_keywords)
     is_command = text_lower.startswith('/')
     # Если это не команда и не про еду, пробуем сопоставить с районом
-    if not is_command and not is_restaurant_related and not context.user_data.get('awaiting_location_or_area') and not context.user_data.get('awaiting_area_input'):
+    if not is_command and not is_restaurant_related and not context.user_data.get('awaiting_location_or_area') and not context.user_data.get('awaiting_area_input') and not context.user_data.get('awaiting_budget_response'):
         try:
             conn = get_db_connection()
             cur = conn.cursor()
@@ -973,90 +973,87 @@ async def talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     # Если это ответ после выбора бюджета
     if context.user_data.get('awaiting_budget_response'):
-        context.user_data['awaiting_budget_response'] = False
-        # Включаем эффект печатания
-        await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.TYPING)
-        await asyncio.sleep(1)  # Добавляем небольшую задержку
-        # Проверяем, относится ли ответ к ресторанам
-        restaurant_keywords = ['мясо', 'рыба', 'морепродукты', 'тайская', 'итальянская', 'японская', 
-                             'китайская', 'индийская', 'вегетарианская', 'веганская', 'барбекю', 
-                             'стейк', 'суши', 'паста', 'пицца', 'бургер', 'фастфуд', 'кафе', 
-                             'ресторан', 'кухня', 'еда', 'ужин', 'обед', 'завтрак', 'brunch']
-        text_lower = text.lower()
-        is_restaurant_related = any(keyword in text_lower for keyword in restaurant_keywords)
-        # Сохраняем последнее пожелание пользователя
-        context.user_data['last_user_wish'] = text
-        # Проверяем, не похоже ли на район (старый механизм)
-        is_area_like = False
-        # Получаем список всех уникальных локаций из базы
+        text = update.message.text.strip()
+        detected_lang = detect_language(text)
         try:
-            conn = get_db_connection()
-            cur = conn.cursor()
-            cur.execute("SELECT DISTINCT location FROM restaurants WHERE location IS NOT NULL AND location != ''")
-            all_locations = [row[0] for row in cur.fetchall()]
-            cur.close()
-            conn.close()
-        except Exception as e:
-            logger.error(f"Error fetching locations from DB: {e}")
-            all_locations = []
-        # Используем OpenAI для сопоставления пользовательского ввода с локациями из базы
-        if all_locations:
+            # Первый строгий промпт
             prompt = (
-                f"Пользователь ввёл: '{text}'. Вот список всех локаций из базы данных: {all_locations}. "
-                "Определи, какая локация из базы наиболее соответствует пользовательскому вводу. "
-                "Верни только точное значение из списка, без пояснений. Если ничего не подходит, верни 'NO_MATCH'."
+                f"Пользователь написал: '{text}'. "
+                f"Если речь идёт о ресторанах, кухне, еде или пожеланиях к ужину, верни только системный ответ в формате ### и перечисли через запятую все предпочтения, которые ты понял (тип кухни, блюда, атмосфера, пожелания и т.д.). "
+                f"Если ничего не понял — верни только 'NO_PREFS'. Не добавляй пояснений, не добавляй приветствий, не добавляй лишних слов. Верни только одну строку: либо '### ...', либо 'NO_PREFS'. Пиши на языке пользователя ({detected_lang})."
             )
-            try:
-                matched_location = (await ask(prompt, None, detected_lang))[0].strip()
-                is_area_like = matched_location != 'NO_MATCH'
-            except Exception as e:
-                logger.error(f"Error in OpenAI location match: {e}")
-                is_area_like = False
-        # Логика выбора реакции
-        if is_restaurant_related:
-            # Показываем кнопки выбора локации в одну строку
-            keyboard = [[
-                InlineKeyboardButton("РЯДОМ", callback_data='location_near'),
-                InlineKeyboardButton("РАЙОН", callback_data='location_area'),
-                InlineKeyboardButton("ВЕЗДЕ", callback_data='location_any')
-            ]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            location_message = "Подберу для Вас отличный ресторан! Поискать поблизости, в другом районе или в любом месте на Пхукете?"
-            await update.message.reply_text(location_message, reply_markup=reply_markup)
-            return
-        elif is_area_like:
-            # Сохраняем найденную локацию и ищем рестораны
-            context.user_data['location'] = {'area': matched_location, 'name': matched_location}
-            await update.message.reply_text(f"Отлично, поищем в районе {matched_location}. Что бы вам хотелось сегодня покушать? Я подберу прекрасный вариант и забронирую столик.")
-            await show_pretty_restaurants(update, context)
-            return
-        else:
-            # Не про еду и не район — отдельный промт для болтовни
-            try:
-                await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.TYPING)
-                await asyncio.sleep(1)
-                flexible_prompt = f"Пользователь написал: '{text}'. Ответь остроумно, дружелюбно, но мягко верни разговор к выбору ресторана. Не используй шаблонные фразы, не повторяй приветствие. Пиши на языке пользователя ({detected_lang})."
-                a, chat_log = ask(flexible_prompt, context.user_data['chat_log'], detected_lang)
-                context.user_data['chat_log'] = chat_log
-                await update.message.reply_text(a)
-            except Exception as e:
-                logger.error(f"Error in ask: {e}")
-                error_message = await translate_message('error', detected_lang)
-                await update.message.reply_text(error_message)
-            return
+            a, chat_log = ask(prompt, context.user_data['chat_log'], detected_lang, add_default_prompt=False)
+            context.user_data['chat_log'] = chat_log
+            answer = a.strip()
+            logger.info(f"[DEBUG] Ответ ChatGPT на предпочтения: {answer}")
+            if answer.startswith('###'):
+                prefs = answer.replace('###', '').strip().split('\n')[0].strip()
+                if prefs and prefs != 'NO_PREFS':
+                    context.user_data['user_preferences'] = prefs
+                    context.user_data['awaiting_budget_response'] = False
+                    keyboard = [[
+                        InlineKeyboardButton("РЯДОМ", callback_data='location_near'),
+                        InlineKeyboardButton("РАЙОН", callback_data='location_area'),
+                        InlineKeyboardButton("ВЕЗДЕ", callback_data='location_any')
+                    ]]
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+                    location_message = "Подберу для Вас отличный ресторан! Поискать поблизости, в другом районе или в любом месте на Пхукете?"
+                    await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.TYPING)
+                    await asyncio.sleep(1)
+                    await update.message.reply_text(location_message, reply_markup=reply_markup)
+                    return
+            if '###' not in answer and 'NO_PREFS' not in answer:
+                strict_prompt = (
+                    f"Пользователь написал: '{text}'. "
+                    f"Верни только одну строку: либо '### предпочтения', либо 'NO_PREFS'. Никаких других слов, пояснений, приветствий, только одна строка. Пиши на языке пользователя ({detected_lang})."
+                )
+                a2, chat_log2 = ask(strict_prompt, context.user_data['chat_log'], detected_lang, add_default_prompt=False)
+                context.user_data['chat_log'] = chat_log2
+                answer2 = a2.strip()
+                logger.info(f"[DEBUG] Повторный ответ ChatGPT на предпочтения: {answer2}")
+                if answer2.startswith('###'):
+                    prefs = answer2.replace('###', '').strip().split('\n')[0].strip()
+                    if prefs and prefs != 'NO_PREFS':
+                        context.user_data['user_preferences'] = prefs
+                        context.user_data['awaiting_budget_response'] = False
+                        keyboard = [[
+                            InlineKeyboardButton("РЯДОМ", callback_data='location_near'),
+                            InlineKeyboardButton("РАЙОН", callback_data='location_area'),
+                            InlineKeyboardButton("ВЕЗДЕ", callback_data='location_any')
+                        ]]
+                        reply_markup = InlineKeyboardMarkup(keyboard)
+                        location_message = "Подберу для Вас отличный ресторан! Поискать поблизости, в другом районе или в любом месте на Пхукете?"
+                        await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.TYPING)
+                        await asyncio.sleep(1)
+                        await update.message.reply_text(location_message, reply_markup=reply_markup)
+                        return
+            # Если не найдено предпочтений — болтовня, флаг не сбрасываем
+            flexible_prompt = f"Пользователь написал: '{text}'. Ответь остроумно, дружелюбно, но мягко верни разговор к выбору ресторана. Не используй шаблонные фразы, не повторяй приветствие. Пиши на языке пользователя ({detected_lang})."
+            a, chat_log = ask(flexible_prompt, context.user_data['chat_log'], detected_lang)
+            context.user_data['chat_log'] = chat_log
+            await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.TYPING)
+            await asyncio.sleep(1)
+            await update.message.reply_text(a)
+        except Exception as e:
+            logger.error(f"Error in ask (preferences): {e}")
+            error_message = await translate_message('error', detected_lang)
+            await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.TYPING)
+            await asyncio.sleep(1)
+            await update.message.reply_text(error_message)
+        return
 
     # Все остальные сообщения — обычный диалог
     try:
-        # Включаем эффект печатания
         await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.TYPING)
-        await asyncio.sleep(1)  # Добавляем небольшую задержку
-        
+        await asyncio.sleep(1)
         a, chat_log = ask(update.message.text, context.user_data['chat_log'], detected_lang)
         context.user_data['chat_log'] = chat_log
         await update.message.reply_text(a)
     except Exception as e:
         logger.error("Error in ask: %s", e)
         error_message = await translate_message('error', detected_lang)
+        await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.TYPING)
+        await asyncio.sleep(1)
         await update.message.reply_text(error_message)
 
 async def check_budget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
