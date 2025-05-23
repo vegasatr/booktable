@@ -13,6 +13,7 @@ import asyncio
 from math import radians, sin, cos, sqrt, atan2
 import traceback
 import requests
+import datetime
 
 # Load environment variables
 load_dotenv()
@@ -291,81 +292,6 @@ BASE_MESSAGES = {
 
 # Стартовый лог для chat_log (чтобы не было ошибки NameError)
 start_convo = []
-
-# --- Универсальный переводчик: сначала DeepL, потом ai_engine ---
-async def translate_message(message_key: str, language: str, **kwargs) -> str:
-    base = BASE_MESSAGES[message_key].format(**kwargs)
-    logger.info(f"[translate_message] key={message_key}, lang={language}, base='{base}'")
-    if language == 'en':
-        logger.info(f"[translate_message] language is en, return base: '{base}'")
-        return base
-    # 1. DeepL
-    try:
-        deepl_api_key = os.getenv('DEEPL_API_KEY')
-        if deepl_api_key:
-            url = 'https://api-free.deepl.com/v2/translate'
-            params = {
-                'auth_key': deepl_api_key,
-                'text': base,
-                'target_lang': language.upper()
-            }
-            resp = requests.post(url, data=params, timeout=20)
-            resp.raise_for_status()
-            result = resp.json()
-            translated = result['translations'][0]['text']
-            logger.info(f"[translate_message] DeepL result: '{translated}'")
-            return translated
-    except Exception as e:
-        logger.error(f"[translate_message] DeepL error: {e}")
-    # 2. ai_engine (OpenAI или Яндекс)
-    try:
-        context = kwargs.get('context', None)
-        engine = None
-        if context and 'ai_engine' in context.user_data:
-            engine = context.user_data['ai_engine']
-        else:
-            if ping_openai():
-                engine = 'openai'
-            else:
-                engine = 'yandex'
-            if context:
-                context.user_data['ai_engine'] = engine
-        if engine == 'openai':
-            prompt = get_prompt('translate', 'openai', text=base, target_language=language)
-            messages = [{"role": "user", "content": prompt}]
-            response = client.chat.completions.create(
-                model="gpt-4",
-                messages=messages,
-                temperature=0.3,
-                max_tokens=100
-            )
-            translated = response.choices[0].message.content.strip()
-            logger.info(f"[translate_message] OpenAI result: '{translated}'")
-            return translated
-        elif engine == 'yandex':
-            yandex_api_key = os.getenv('YANDEX_GPT_API_KEY')
-            yandex_folder_id = os.getenv('YANDEX_FOLDER_ID')
-            prompt = get_prompt('translate', 'yandex', text=base, target_language=language)
-            url = 'https://llm.api.cloud.yandex.net/foundationModels/v1/completion'
-            headers = {
-                'Authorization': f'Api-Key {yandex_api_key}',
-                'Content-Type': 'application/json'
-            }
-            data = {
-                "modelUri": f"gpt://{yandex_folder_id}/yandexgpt/latest",
-                "completionOptions": {"stream": False, "temperature": 0.7, "maxTokens": 1000},
-                "messages": [{"role": "user", "text": prompt}]
-            }
-            resp = requests.post(url, headers=headers, json=data, timeout=20)
-            resp.raise_for_status()
-            result = resp.json()
-            translated = result['result']['alternatives'][0]['message']['text'].strip()
-            logger.info(f"[translate_message] Yandex result: '{translated}'")
-            return translated
-    except Exception as e:
-        logger.error(f"[translate_message] AI-engine error: {e}")
-    logger.info(f"[translate_message] Fallback, return base: '{base}'")
-    return base
 
 # --- Новый универсальный определитель языка ---
 def detect_language(text):
@@ -1079,7 +1005,7 @@ async def check_budget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await update.message.reply_text(message)
 
 async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Перезапуск бота: сброс состояния и стартовое приветствие"""
+    logger.info(f"[restart] Вызван. update={update}, user_data={context.user_data}")
     # Сброс всех пользовательских данных
     context.user_data.clear()
     # Убираем все кастомные клавиатуры (в том числе кнопку геолокации)
@@ -1261,8 +1187,177 @@ async def show_other_price_callback(update: Update, context: ContextTypes.DEFAUL
         logger.error(f"Ошибка в show_other_price_callback: {e}")
         await update.effective_chat.send_message(f"Ошибка поиска ресторанов: {e}")
 
+# Проверка доступности DeepL
+async def ping_deepl():
+    try:
+        deepl_api_key = os.getenv('DEEPL_API_KEY')
+        if not deepl_api_key:
+            return False
+        url = 'https://api-free.deepl.com/v2/translate'
+        params = {
+            'auth_key': deepl_api_key,
+            'text': 'ping',
+            'target_lang': 'RU'
+        }
+        resp = requests.post(url, data=params, timeout=10)
+        resp.raise_for_status()
+        result = resp.json()
+        return 'translations' in result
+    except Exception as e:
+        with open('logs/api_errors.log', 'a') as f:
+            f.write(f"{datetime.datetime.now()} [DEEPL] {e}\n")
+        return False
+
+# Проверка доступности OpenAI и Яндекс — уже есть ping_openai
+# Для Яндекс можно аналогично
+async def ping_yandex():
+    try:
+        yandex_api_key = os.getenv('YANDEX_GPT_API_KEY')
+        yandex_folder_id = os.getenv('YANDEX_FOLDER_ID')
+        if not yandex_api_key or not yandex_folder_id:
+            return False
+        url = 'https://llm.api.cloud.yandex.net/foundationModels/v1/completion'
+        headers = {
+            'Authorization': f'Api-Key {yandex_api_key}',
+            'Content-Type': 'application/json'
+        }
+        data = {
+            "modelUri": f"gpt://{yandex_folder_id}/yandexgpt/latest",
+            "completionOptions": {"stream": False, "temperature": 0.1, "maxTokens": 2},
+            "messages": [{"role": "user", "text": "ping"}]
+        }
+        resp = requests.post(url, headers=headers, json=data, timeout=10)
+        resp.raise_for_status()
+        result = resp.json()
+        return 'result' in result
+    except Exception as e:
+        with open('logs/api_errors.log', 'a') as f:
+            f.write(f"{datetime.datetime.now()} [YANDEX] {e}\n")
+        return False
+
+# При запуске бота проверяем все API и сохраняем статус
+async def check_all_apis(application):
+    application.bot_data['deepl_ok'] = await ping_deepl()
+    application.bot_data['openai_ok'] = ping_openai()
+    application.bot_data['yandex_ok'] = await ping_yandex()
+    # Логируем в файл, если что-то не работает
+    with open('logs/api_errors.log', 'a') as f:
+        if not application.bot_data['deepl_ok']:
+            f.write(f"{datetime.datetime.now()} [DEEPL] NOT AVAILABLE\n")
+        if not application.bot_data['openai_ok']:
+            f.write(f"{datetime.datetime.now()} [OPENAI] NOT AVAILABLE\n")
+        if not application.bot_data['yandex_ok']:
+            f.write(f"{datetime.datetime.now()} [YANDEX] NOT AVAILABLE\n")
+
+async def translate_message(message_key: str, language: str, **kwargs) -> str:
+    base = BASE_MESSAGES[message_key].format(**kwargs)
+    logger.info(f"[translate_message] key={message_key}, lang={language}, base='{base}'")
+    if language == 'en':
+        logger.info(f"[translate_message] language is en, return base: '{base}'")
+        return base
+    # 1. DeepL, если доступен
+    context = kwargs.get('context', None)
+    app = getattr(context, 'application', None) if context else None
+    deepl_ok = getattr(app, 'bot_data', {}).get('deepl_ok', True) if app else True
+    if deepl_ok:
+        try:
+            deepl_api_key = os.getenv('DEEPL_API_KEY')
+            if deepl_api_key:
+                url = 'https://api-free.deepl.com/v2/translate'
+                params = {
+                    'auth_key': deepl_api_key,
+                    'text': base,
+                    'target_lang': language.upper()
+                }
+                resp = requests.post(url, data=params, timeout=20)
+                resp.raise_for_status()
+                result = resp.json()
+                translated = result['translations'][0]['text']
+                logger.info(f"[translate_message] DeepL result: '{translated}'")
+                return translated
+        except Exception as e:
+            logger.error(f"[translate_message] DeepL error: {e}")
+            with open('logs/api_errors.log', 'a') as f:
+                f.write(f"{datetime.datetime.now()} [DEEPL] {e}\n")
+    # 2. ai_engine (OpenAI или Яндекс) — только если доступны
+    try:
+        engine = None
+        if context and 'ai_engine' in context.user_data:
+            engine = context.user_data['ai_engine']
+        else:
+            if getattr(app, 'bot_data', {}).get('openai_ok', False):
+                engine = 'openai'
+            elif getattr(app, 'bot_data', {}).get('yandex_ok', False):
+                engine = 'yandex'
+            else:
+                engine = 'yandex'  # fallback только на yandex если openai недоступен
+            if context:
+                context.user_data['ai_engine'] = engine
+        if engine == 'openai':
+            try:
+                prompt = get_prompt('translate', 'openai', text=base, target_language=language)
+                messages = [{"role": "user", "content": prompt}]
+                response = client.chat.completions.create(
+                    model="gpt-4",
+                    messages=messages,
+                    temperature=0.3,
+                    max_tokens=100
+                )
+                translated = response.choices[0].message.content.strip()
+                logger.info(f"[translate_message] OpenAI result: '{translated}'")
+                return translated
+            except Exception as e:
+                logger.error(f"[translate_message] OpenAI error: {e}")
+                with open('logs/api_errors.log', 'a') as f:
+                    f.write(f"{datetime.datetime.now()} [OPENAI] {e}\n")
+                # Если ошибка 429 или другая — отключаем OpenAI до рестарта
+                if app:
+                    app.bot_data['openai_ok'] = False
+                engine = 'yandex'  # fallback на yandex
+        if engine == 'yandex':
+            yandex_api_key = os.getenv('YANDEX_GPT_API_KEY')
+            yandex_folder_id = os.getenv('YANDEX_FOLDER_ID')
+            prompt = get_prompt('translate', 'yandex', text=base, target_language=language)
+            url = 'https://llm.api.cloud.yandex.net/foundationModels/v1/completion'
+            headers = {
+                'Authorization': f'Api-Key {yandex_api_key}',
+                'Content-Type': 'application/json'
+            }
+            data = {
+                "modelUri": f"gpt://{yandex_folder_id}/yandexgpt/latest",
+                "completionOptions": {"stream": False, "temperature": 0.7, "maxTokens": 1000},
+                "messages": [{"role": "user", "text": prompt}]
+            }
+            resp = requests.post(url, headers=headers, json=data, timeout=20)
+            resp.raise_for_status()
+            result = resp.json()
+            translated = result['result']['alternatives'][0]['message']['text'].strip()
+            logger.info(f"[translate_message] Yandex result: '{translated}'")
+            return translated
+    except Exception as e:
+        logger.error(f"[translate_message] AI-engine error: {e}")
+        with open('logs/api_errors.log', 'a') as f:
+            f.write(f"{datetime.datetime.now()} [AI-engine] {e}\n")
+    logger.info(f"[translate_message] Fallback, return base: '{base}'")
+    return base
+
+# Устанавливаем команды и меню после запуска
+async def set_bot_commands(app):
+    await app.bot.set_my_commands([
+        ("restart", "Перезапустить бота")
+    ])
+    await app.bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+
+# --- ОБЪЕДИНЁННАЯ post_init ---
+async def bot_post_init(app):
+    await check_all_apis(app)
+    await set_bot_commands(app)
+
 def main():
     app = ApplicationBuilder().token(telegram_token).build()
+    # Удаляю asyncio.run(check_all_apis(app))
+    # Вместо этого назначаю post_init
+    app.post_init = bot_post_init
     
     # Базовые команды
     app.add_handler(CommandHandler("start", start))
@@ -1282,8 +1377,6 @@ def main():
     app.add_handler(MessageHandler(filters.LOCATION, handle_location))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, talk))
     
-    # Устанавливаем команды и меню после запуска
-    app.post_init = set_bot_commands
     # Запуск бота
     app.run_polling()
 
