@@ -1,0 +1,108 @@
+============================= test session starts ==============================
+platform linux -- Python 3.10.12, pytest-8.3.5, pluggy-1.6.0
+rootdir: /root/booktable_bot
+plugins: cov-6.1.1, anyio-4.9.0, asyncio-0.26.0
+asyncio: mode=strict, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 42 items
+
+tests/test_bot.py .                                                      [  2%]
+tests/test_main.py ....s......s.ss....s....s...FFFFFF.ss....             [100%]
+
+=================================== FAILURES ===================================
+___________________ test_talk_finalizing_restaurant_booking ____________________
+tests/test_main.py:423: in test_talk_finalizing_restaurant_booking
+    assert context.user_data['booking_in_progress'] is True
+E   assert False is True
+------------------------------ Captured log call -------------------------------
+INFO     main:main.py:873 Processing message from testuser: Забронировать
+ERROR    main:main.py:865 Error detecting language with ChatGPT: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}
+INFO     main:main.py:877 Detected language: en
+INFO     main:main.py:47 Attempting to connect to database via socket
+INFO     main:main.py:53 Successfully connected to database
+ERROR    main:main.py:915 Error in OpenAI location match: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}
+_____________________ test_talk_finalizing_restaurant_next _____________________
+tests/test_main.py:439: in test_talk_finalizing_restaurant_next
+    mock_reply.assert_called_with('Показываю следующий ресторан! (здесь будет переключение)')
+/usr/lib/python3.10/unittest/mock.py:929: in assert_called_with
+    raise AssertionError(_error_message()) from cause
+E   AssertionError: expected call not found.
+E   Expected: reply_text('Показываю следующий ресторан! (здесь будет переключение)')
+E   Actual: reply_text('Ошибка при обработке локации через AI.')
+------------------------------ Captured log call -------------------------------
+INFO     main:main.py:873 Processing message from testuser: другой
+ERROR    main:main.py:865 Error detecting language with ChatGPT: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}
+INFO     main:main.py:877 Detected language: en
+INFO     main:main.py:47 Attempting to connect to database via socket
+INFO     main:main.py:53 Successfully connected to database
+ERROR    main:main.py:915 Error in OpenAI location match: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}
+___________________ test_talk_finalizing_restaurant_question ___________________
+tests/test_main.py:453: in test_talk_finalizing_restaurant_question
+    mock_reply.assert_any_call('Отвечаю на вопрос по ресторану! (здесь будет AI-ответ)')
+/usr/lib/python3.10/unittest/mock.py:1000: in assert_any_call
+    raise AssertionError(
+E   AssertionError: reply_text('Отвечаю на вопрос по ресторану! (здесь будет AI-ответ)') call not found
+------------------------------ Captured log call -------------------------------
+INFO     main:main.py:873 Processing message from testuser: Что по меню?
+ERROR    main:main.py:865 Error detecting language with ChatGPT: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}
+INFO     main:main.py:877 Detected language: en
+INFO     main:main.py:47 Attempting to connect to database via socket
+INFO     main:main.py:53 Successfully connected to database
+ERROR    main:main.py:915 Error in OpenAI location match: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}
+_________________ test_talk_finalizing_restaurant_soft_return __________________
+tests/test_main.py:467: in test_talk_finalizing_restaurant_soft_return
+    mock_reply.assert_any_call('Давайте обсудим ресторан или перейдём к бронированию! (мягкое возвращение)')
+/usr/lib/python3.10/unittest/mock.py:1000: in assert_any_call
+    raise AssertionError(
+E   AssertionError: reply_text('Давайте обсудим ресторан или перейдём к бронированию! (мягкое возвращение)') call not found
+------------------------------ Captured log call -------------------------------
+INFO     main:main.py:873 Processing message from testuser: Просто текст
+ERROR    main:main.py:865 Error detecting language with ChatGPT: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}
+INFO     main:main.py:877 Detected language: en
+INFO     main:main.py:47 Attempting to connect to database via socket
+INFO     main:main.py:53 Successfully connected to database
+ERROR    main:main.py:915 Error in OpenAI location match: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}
+___________________________ test_talk_booking_steps ____________________________
+tests/test_main.py:480: in test_talk_booking_steps
+    assert context.user_data['booking_step'] == 'date'
+E   AssertionError: assert 'guests' == 'date'
+E     
+E     - date
+E     + guests
+------------------------------ Captured log call -------------------------------
+INFO     main:main.py:873 Processing message from testuser: 2
+ERROR    main:main.py:865 Error detecting language with ChatGPT: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}
+INFO     main:main.py:877 Detected language: en
+INFO     main:main.py:47 Attempting to connect to database via socket
+INFO     main:main.py:53 Successfully connected to database
+ERROR    main:main.py:915 Error in OpenAI location match: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}
+_________________________ test_talk_booking_wrong_step _________________________
+tests/test_main.py:520: in test_talk_booking_wrong_step
+    mock_reply.assert_called_with('Пожалуйста, укажите корректные данные для бронирования.')
+/usr/lib/python3.10/unittest/mock.py:929: in assert_called_with
+    raise AssertionError(_error_message()) from cause
+E   AssertionError: expected call not found.
+E   Expected: reply_text('Пожалуйста, укажите корректные данные для бронирования.')
+E   Actual: reply_text('Ошибка при обработке локации через AI.')
+------------------------------ Captured log call -------------------------------
+INFO     main:main.py:873 Processing message from testuser: что-то не то
+ERROR    main:main.py:865 Error detecting language with ChatGPT: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}
+INFO     main:main.py:877 Detected language: en
+INFO     main:main.py:47 Attempting to connect to database via socket
+INFO     main:main.py:53 Successfully connected to database
+ERROR    main:main.py:915 Error in OpenAI location match: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}
+================================ tests coverage ================================
+_______________ coverage: platform linux, python 3.10.12-final-0 _______________
+
+Name      Stmts   Miss  Cover   Missing
+---------------------------------------
+main.py     749    297    60%   56-59, 118-119, 146, 165-168, 172, 248-249, 372-375, 425-426, 486-502, 515, 567-616, 623-633, 635-637, 662, 670-678, 681, 683, 689-732, 737-741, 768-773, 807, 813-814, 819-826, 851, 853, 855, 857, 859, 861, 897-900, 932-1060, 1068, 1082-1085, 1111-1112, 1141-1142, 1162, 1172-1173, 1175-1178, 1181, 1183, 1189-1232, 1237-1242, 1245-1268, 1271
+---------------------------------------
+TOTAL       749    297    60%
+=========================== short test summary info ============================
+FAILED tests/test_main.py::test_talk_finalizing_restaurant_booking - assert F...
+FAILED tests/test_main.py::test_talk_finalizing_restaurant_next - AssertionEr...
+FAILED tests/test_main.py::test_talk_finalizing_restaurant_question - Asserti...
+FAILED tests/test_main.py::test_talk_finalizing_restaurant_soft_return - Asse...
+FAILED tests/test_main.py::test_talk_booking_steps - AssertionError: assert '...
+FAILED tests/test_main.py::test_talk_booking_wrong_step - AssertionError: exp...
+============= 6 failed, 28 passed, 8 skipped, 1 warning in 53.17s ==============

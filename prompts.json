@@ -1,0 +1,32 @@
+{
+  "translate": {
+    "openai": "Translate the following text to {target_language}: {text}",
+    "yandex": "Переведи на {target_language}: {text}",
+    "deepl": "{text}"
+  },
+  "detect_language": {
+    "openai": "Detect the language of the following text and return only the ISO 639-1 code: {text}",
+    "yandex": "Определи язык: {text}",
+    "deepl": "{text}"
+  },
+  "greet": {
+    "openai": "Greet the user in {target_language} as a friendly restaurant assistant.",
+    "yandex": "Поздоровайся с пользователем на {target_language} как дружелюбный ресторанный помощник.",
+    "deepl": ""
+  },
+  "restaurant_recommendation": {
+    "openai": "Recommend a restaurant based on these preferences: {preferences}. Respond in {target_language}.",
+    "yandex": "Порекомендуй ресторан по этим предпочтениям: {preferences}. Ответь на {target_language}.",
+    "deepl": ""
+  },
+  "clarify": {
+    "openai": "Ask the user for more details about their restaurant preferences in {target_language}.",
+    "yandex": "Попроси пользователя уточнить пожелания к ресторану на {target_language}.",
+    "deepl": ""
+  },
+  "fallback_error": {
+    "openai": "Sorry, an error occurred. Please try again.",
+    "yandex": "Извините, произошла ошибка. Пожалуйста, попробуйте ещё раз.",
+    "deepl": ""
+  }
+} 

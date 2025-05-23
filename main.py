@@ -12,6 +12,7 @@ from geopy.geocoders import Nominatim
 import asyncio
 from math import radians, sin, cos, sqrt, atan2
 import traceback
+import requests
 
 # Load environment variables
 load_dotenv()
@@ -128,51 +129,108 @@ def save_user_to_db(user_id, username, first_name, last_name, language):
             conn.close()
             logger.info("Database connection closed")
 
-# Загружаем промпт
-with open('prompt.txt', 'r', encoding='utf-8') as f:
-    system_prompt = f.read().strip()
+# Загружаем промпты
+with open('prompts.json', 'r', encoding='utf-8') as f:
+    PROMPTS = json.load(f)
 
-# Базовый контекст для ChatGPT
-start_convo = [
-    {"role": "system", "content": system_prompt}
-]
+def get_prompt(task, engine, **kwargs):
+    template = PROMPTS.get(task, {}).get(engine, "")
+    return template.format(**kwargs)
 
-def is_this_user_allowed(user_id):
-    allowed_users = os.getenv('ALLOWED_USERS', '').split(',')
-    return str(user_id) in allowed_users
+# --- Быстрая проверка доступности OpenAI ---
+def ping_openai():
+    try:
+        client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "ping"}],
+            temperature=0.0,
+            max_tokens=1
+        )
+        return True
+    except Exception:
+        return False
 
-def ask(q, chat_log=None, language='en'):
-    if chat_log is None:
-        chat_log = start_convo.copy()
-    
-    # Добавляем инструкцию о языке в промпт
-    language_instruction = f"Please respond in {language} language."
-    chat_log = chat_log + [{"role": "user", "content": f"{language_instruction}\n{q}"}]
-    
-    # Формируем промпт для ChatGPT
-    prompt = f"Пользователь спросил: '{q}'. Если речь идет о ресторанах, верни системный ответ в формате ### и перечисли ключевые аспекты через запятую."
-    chat_log = chat_log + [{"role": "user", "content": prompt}]
-    
-    logger.debug(f"Sending prompt to ChatGPT: {chat_log}")
-    
-    response = client.chat.completions.create(
-        model="gpt-4",
-        messages=chat_log,
-        temperature=0.7,
-        max_tokens=1000
-    )
-    
-    answer = response.choices[0].message.content
-    logger.debug(f"Received response from ChatGPT: {answer}")
-    chat_log = chat_log + [{"role": "assistant", "content": answer}]
-    return answer, chat_log
-
-def append_interaction_to_chat_log(q, a, chat_log=None):
-    if chat_log is None:
-        chat_log = start_convo.copy()
-    chat_log = chat_log + [{"role": "user", "content": q}]
-    chat_log = chat_log + [{"role": "assistant", "content": a}]
-    return chat_log
+# --- Универсальный слой генерации/диалогов с выбором движка ---
+async def ai_generate(task, text=None, target_language=None, preferences=None, context_log=None, context=None):
+    """
+    Для генерации ответов, рекомендаций, уточнений и т.д. — только OpenAI или ЯндексGPT.
+    task: restaurant_recommendation, greet, clarify, fallback_error
+    """
+    engine = None
+    if context and 'ai_engine' in context.user_data:
+        engine = context.user_data['ai_engine']
+    else:
+        # Определяем движок при первом обращении
+        if ping_openai():
+            engine = 'openai'
+        else:
+            engine = 'yandex'
+        if context:
+            context.user_data['ai_engine'] = engine
+    if engine == 'openai':
+        try:
+            if task == 'restaurant_recommendation':
+                prompt = get_prompt('restaurant_recommendation', 'openai', preferences=preferences, target_language=target_language)
+            elif task == 'greet':
+                prompt = get_prompt('greet', 'openai', target_language=target_language)
+            elif task == 'clarify':
+                prompt = get_prompt('clarify', 'openai', target_language=target_language)
+            else:
+                prompt = get_prompt('fallback_error', 'openai')
+            messages = [{"role": "user", "content": prompt}]
+            logger.info(f"[AI] OpenAI prompt: {prompt}")
+            response = client.chat.completions.create(
+                model="gpt-4",
+                messages=messages,
+                temperature=0.7,
+                max_tokens=1000
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            logger.error(f"OpenAI error: {e}")
+            if context:
+                context.user_data['ai_engine'] = 'yandex'
+            engine = 'yandex'
+    if engine == 'yandex':
+        try:
+            logger.info("[AI] YandexGPT fallback for generation...")
+            yandex_api_key = os.getenv('YANDEX_GPT_API_KEY')
+            yandex_folder_id = os.getenv('YANDEX_FOLDER_ID')
+            if not yandex_api_key or not yandex_folder_id:
+                raise Exception('YANDEX_GPT_API_KEY or YANDEX_FOLDER_ID not set')
+            if task == 'restaurant_recommendation':
+                prompt = get_prompt('restaurant_recommendation', 'yandex', preferences=preferences, target_language=target_language)
+            elif task == 'greet':
+                prompt = get_prompt('greet', 'yandex', target_language=target_language)
+            elif task == 'clarify':
+                prompt = get_prompt('clarify', 'yandex', target_language=target_language)
+            else:
+                prompt = get_prompt('fallback_error', 'yandex')
+            url = 'https://llm.api.cloud.yandex.net/foundationModels/v1/completion'
+            headers = {
+                'Authorization': f'Api-Key {yandex_api_key}',
+                'Content-Type': 'application/json'
+            }
+            data = {
+                "modelUri": f"gpt://{yandex_folder_id}/yandexgpt/latest",
+                "completionOptions": {"stream": False, "temperature": 0.7, "maxTokens": 1000},
+                "messages": [{"role": "user", "text": prompt}]
+            }
+            resp = requests.post(url, headers=headers, json=data, timeout=20)
+            resp.raise_for_status()
+            logger.info(f"[AI] YandexGPT raw response: {resp.text}")
+            try:
+                result = resp.json()
+                text = result['result']['alternatives'][0]['message']['text'].strip()
+                return text
+            except Exception as parse_e:
+                logger.error(f"YandexGPT response parse error: {parse_e}; raw: {resp.text}")
+                return get_prompt('fallback_error', 'yandex')
+        except Exception as e:
+            logger.error(f"YandexGPT error: {e}")
+            return get_prompt('fallback_error', 'yandex')
+    logger.error(f"All AI engines failed for task {task}")
+    return get_prompt('fallback_error', 'yandex')
 
 # Список районов Пхукета
 PHUKET_AREAS = {
@@ -218,44 +276,137 @@ BASE_MESSAGES = {
     'location_send': "Please send your location:",
     'location_thanks': "Thank you! Now I know your location.",
     'area_question': "Choose area:",
-    'area_selected': "Selected area: {}",
+    'area_selected': "Great, let's search in the {area} area. What would you like to eat today? I'll find a great option and book a table.",
     'location_any_confirmed': "Okay, I'll search restaurants all over the island.",
     'location_error': "Sorry, I couldn't get your location. Please try again or choose another option.",
-    'other_area_prompt': "Please specify the area or location you're interested in."
+    'other_area_prompt': "Please specify the area or location you're interested in.",
+    'choose_area_instruction': "Choose an area from the list or type a more precise location",
+    'area_not_found_by_coords': "Could not determine the area by coordinates. Please select an area manually.",
+    'generic_error': "An error occurred. Please try again.",
+    'another_price_not_found': "There are no restaurants in other price categories in this area. Try another area.",
+    'area_not_found': "Error: could not determine the area for restaurant search.",
+    'search_error': "Error searching for restaurants: {error}",
+    'only_restaurant_help': "I can only help with restaurant selection and booking. Tell me what you'd like to eat or which restaurant you're looking for.",
 }
 
+# --- Универсальный переводчик: сначала DeepL, потом ai_engine ---
 async def translate_message(message_key: str, language: str, **kwargs) -> str:
     """
-    Переводит сообщение на нужный язык с помощью ChatGPT.
+    Переводит сообщение на нужный язык: сначала DeepL, если не сработал — через выбранный ai_engine (OpenAI или ЯндексGPT).
     """
+    base = BASE_MESSAGES[message_key].format(**kwargs)
+    if language == 'en':
+        return base
+    # 1. DeepL
     try:
-        # Если язык английский, возвращаем оригинальное сообщение
-        if language == 'en':
-            return BASE_MESSAGES[message_key].format(**kwargs)
-            
-        # Формируем промпт для перевода
-        prompt = f"""Translate the following English message to {language} language. 
-        Keep the same meaning and tone. If there are placeholders like {{}}, keep them in the translation.
-        Message: {BASE_MESSAGES[message_key]}"""
-        
-        response = client.chat.completions.create(
-            model="gpt-4",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,  # Низкая температура для более точного перевода
-            max_tokens=100
-        )
-        
-        translated = response.choices[0].message.content.strip()
-        return translated.format(**kwargs)
+        deepl_api_key = os.getenv('DEEPL_API_KEY')
+        if deepl_api_key:
+            url = 'https://api-free.deepl.com/v2/translate'
+            params = {
+                'auth_key': deepl_api_key,
+                'text': base,
+                'target_lang': language.upper()
+            }
+            resp = requests.post(url, data=params, timeout=20)
+            resp.raise_for_status()
+            result = resp.json()
+            return result['translations'][0]['text']
+    except Exception as e:
+        logger.error(f"DeepL error: {e}")
+    # 2. ai_engine (OpenAI или Яндекс)
+    try:
+        context = kwargs.get('context', None)
+        engine = None
+        if context and 'ai_engine' in context.user_data:
+            engine = context.user_data['ai_engine']
+        else:
+            if ping_openai():
+                engine = 'openai'
+            else:
+                engine = 'yandex'
+            if context:
+                context.user_data['ai_engine'] = engine
+        if engine == 'openai':
+            prompt = get_prompt('translate', 'openai', text=base, target_language=language)
+            messages = [{"role": "user", "content": prompt}]
+            response = client.chat.completions.create(
+                model="gpt-4",
+                messages=messages,
+                temperature=0.3,
+                max_tokens=100
+            )
+            return response.choices[0].message.content.strip()
+        elif engine == 'yandex':
+            yandex_api_key = os.getenv('YANDEX_GPT_API_KEY')
+            yandex_folder_id = os.getenv('YANDEX_FOLDER_ID')
+            prompt = get_prompt('translate', 'yandex', text=base, target_language=language)
+            url = 'https://llm.api.cloud.yandex.net/foundationModels/v1/completion'
+            headers = {
+                'Authorization': f'Api-Key {yandex_api_key}',
+                'Content-Type': 'application/json'
+            }
+            data = {
+                "modelUri": f"gpt://{yandex_folder_id}/yandexgpt/latest",
+                "completionOptions": {"stream": False, "temperature": 0.7, "maxTokens": 1000},
+                "messages": [{"role": "user", "text": prompt}]
+            }
+            resp = requests.post(url, headers=headers, json=data, timeout=20)
+            resp.raise_for_status()
+            result = resp.json()
+            return result['result']['alternatives'][0]['message']['text'].strip()
     except Exception as e:
         logger.error(f"Error translating message: {e}")
-        return BASE_MESSAGES[message_key].format(**kwargs)  # Возвращаем оригинальное сообщение в случае ошибки
+    return base
+
+# --- Новый универсальный определитель языка ---
+def detect_language(text):
+    """
+    Определяет язык текста через ai_generate (fallback: OpenAI → Yandex).
+    Возвращает код языка в формате ISO 639-1.
+    """
+    try:
+        lang = asyncio.run(ai_generate('detect_language', text=text))
+        lang = lang.strip().lower()
+        # Маппинг для схожих языков
+        if lang in ['es', 'ca', 'gl']:
+            return 'es'
+        elif lang in ['fr', 'oc']:
+            return 'fr'
+        elif lang in ['ru', 'uk', 'be']:
+            return 'ru'
+        elif lang in ['zh', 'zh_cn', 'zh_tw']:
+            return 'zh'
+        elif lang in ['ar', 'fa', 'ur']:
+            return 'ar'
+        elif lang in ['th', 'lo']:
+            return 'th'
+        return lang
+    except Exception as e:
+        logger.error(f"Error detecting language: {e}")
+        return 'en'
+
+# --- Новый универсальный генератор ответов ---
+async def ask(text, chat_log=None, language='en'):
+    """
+    Генерирует ответ на сообщение пользователя через ai_generate (fallback: OpenAI → Yandex).
+    Возвращает (ответ, обновлённый chat_log).
+    """
+    try:
+        answer = await ai_generate('restaurant_recommendation', text=text, target_language=language, context_log=chat_log)
+        # chat_log не обновляем, т.к. ai_generate не ведёт историю
+        return answer, chat_log or []
+    except Exception as e:
+        logger.error(f"Error in ask: {e}")
+        return await ai_generate('fallback_error'), chat_log or []
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     user_id = user["id"]
     username = user["username"]
 
+    # Эффект набора текста перед приветствием
+    await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.TYPING)
+    await asyncio.sleep(1)
     # Первое приветственное сообщение
     await update.message.reply_text(
         f'Hello and welcome to BookTable.AI v{VERSION}!\n'
@@ -278,7 +429,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    
+    # Эффект набора текста перед выбором языка
+    await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.TYPING)
+    await asyncio.sleep(1)
     # Отправляем объединенное сообщение с кнопками
     await update.message.reply_text(
         'Please choose your language or just type a message — I understand more than 120 languages and will reply in yours!',
@@ -293,27 +446,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def language_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         query = update.callback_query
-        logger.debug(f"[language_callback] Received callback query: {query.data}")
-        print("[language_callback] Received callback query")
-        
-        # Получаем выбранный язык из callback_data
         lang = query.data.split('_')[1]
-        logger.debug(f"[language_callback] Selected language: {lang}")
-        print(f"[language_callback] Selected language: {lang}")
-        
         context.user_data['language'] = lang
         context.user_data['awaiting_language'] = False
-        
-        # Удаляем сообщение с кнопками выбора языка
         await query.message.delete()
-        logger.debug("[language_callback] Deleted language selection message")
-        print("[language_callback] Deleted language selection message")
-        
-        # Сохраняем пользователя в базу данных
         user = update.effective_user
-        logger.debug(f"[language_callback] Processing user: {user.id} ({user.username})")
-        print(f"[language_callback] Processing user: {user.id} ({user.username})")
-        
         client_number = save_user_to_db(
             user_id=user.id,
             username=user.username,
@@ -321,58 +458,24 @@ async def language_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             last_name=user.last_name,
             language=lang
         )
-        logger.debug(f"[language_callback] User saved with client_number: {client_number}")
-        print(f"[language_callback] User saved with client_number: {client_number}")
-        
-        # Отправляем приветствие на выбранном языке
-        welcome_messages = {
-            'ru': "Я знаю о ресторанах на Пхукете всё.",  # Возвращаем строку в приветственное сообщение
-            'en': "I know everything about restaurants in Phuket.",
-            'fr': "Je connais tout sur les restaurants de Phuket.",
-            'ar': "أعرف كل شيء عن المطاعم في بوكيت.",
-            'zh': "我了解普吉岛的所有餐厅。",
-            'th': "ผมรู้ทุกอย่างเกี่ยวกับร้านอาหารในภูเก็ต"
-        }
-        
-        welcome_message = welcome_messages.get(lang, welcome_messages['en'])
-        logger.debug(f"[language_callback] Sending welcome message: {welcome_message}")
-        print(f"[language_callback] Sending welcome message: {welcome_message}")
-        await query.message.reply_text(welcome_message)
-        logger.debug("[language_callback] Welcome message sent")
-        print("[language_callback] Welcome message sent")
-        
-        # Показываем кнопки выбора бюджета
-        keyboard = [
-            [
-                InlineKeyboardButton("$", callback_data="budget_1"),
-                InlineKeyboardButton("$$", callback_data="budget_2"),
-                InlineKeyboardButton("$$$", callback_data="budget_3"),
-                InlineKeyboardButton("$$$$", callback_data="budget_4")
-            ]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        # Сообщения о выборе бюджета на разных языках
-        budget_messages = {
-            'ru': "С каким средним чеком подберем ресторан?",
-            'en': "What price range would you prefer for the restaurant?",
-            'fr': "Quelle gamme de prix préférez-vous pour le restaurant ?",
-            'ar': "ما هو نطاق السعر الذي تفضله للمطعم؟",
-            'zh': "您希望餐厅的价格范围是多少？",
-            'th': "คุณต้องการช่วงราคาของร้านอาหารเท่าไหร่?"
-        }
-        
-        message = budget_messages.get(lang, budget_messages['en'])
-        logger.debug(f"[language_callback] Sending budget message: {message}")
-        print(f"[language_callback] Sending budget message: {message}")
-        await query.message.reply_text(message, reply_markup=reply_markup)
-        logger.debug("[language_callback] Budget message sent")
-        print("[language_callback] Budget message sent")
-        
+        welcome_message = await translate_message('welcome', lang)
+        # Эффект набора текста перед приветствием
+        await context.bot.send_chat_action(chat_id=update.effective_user.id, action=ChatAction.TYPING)
+        await asyncio.sleep(1)
+        if query.message:
+            await query.message.reply_text(welcome_message)
+        else:
+            await context.bot.send_message(chat_id=update.effective_user.id, text=welcome_message)
+        await show_budget_buttons(update, context)
     except Exception as e:
         logger.error(f"Error in language_callback: {e}")
-        print(f"[language_callback] Exception: {e}")
-        await query.message.reply_text("Sorry, an error occurred. Please try again.")
+        try:
+            if hasattr(query, 'message') and query.message:
+                await query.message.reply_text("Произошла ошибка. Пожалуйста, попробуйте ещё раз.")
+            else:
+                await context.bot.send_message(chat_id=update.effective_user.id, text="Произошла ошибка. Пожалуйста, попробуйте ещё раз.")
+        except Exception as send_e:
+            logger.error(f"Failed to send error message: {send_e}")
 
 async def show_budget_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     keyboard = [
@@ -383,94 +486,53 @@ async def show_budget_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE
             InlineKeyboardButton("$$$$", callback_data="budget_4")
         ]
     ]
-    
     reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    # Получаем актуальный язык пользователя
     lang = context.user_data.get('language', 'en')
     message = await translate_message('budget_question', lang)
-    
-    await update.message.reply_text(message, reply_markup=reply_markup)
+    # Эффект набора текста перед кнопками бюджета
+    chat_id = update.message.chat_id if hasattr(update, 'message') and update.message else update.effective_user.id
+    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+    await asyncio.sleep(1)
+    if hasattr(update, 'message') and update.message:
+        await update.message.reply_text(message, reply_markup=reply_markup)
+    else:
+        await context.bot.send_message(chat_id=update.effective_user.id, text=message, reply_markup=reply_markup)
 
 async def budget_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-    logger.debug(f"[budget_callback] Received callback query: {query.data}")
-    print("[budget_callback] Received callback query")
-    
-    # Сразу включаем эффект печатания
     await context.bot.send_chat_action(chat_id=query.message.chat_id, action=ChatAction.TYPING)
-    
-    # Сохраняем выбор бюджета
     budget = query.data.split('_')[1]
     context.user_data['budget'] = budget
-    logger.debug(f"[budget_callback] Budget set: {budget}")
-    print(f"[budget_callback] Budget set: {budget}")
-    
     language = context.user_data.get('language', 'en')
-    
-    # Подготавливаем сообщение о сохранении бюджета
     budget_saved = await translate_message('budget_saved', language)
-    
-    # Удаляем сообщение с кнопками бюджета
     await query.message.delete()
-    
-    # Удаляем предыдущее сообщение (приветствие)
     try:
-        # Получаем ID чата
         chat_id = query.message.chat_id
-        # Получаем ID сообщения с кнопками
         message_id = query.message.message_id
-        # Удаляем предыдущее сообщение (message_id - 1)
         await context.bot.delete_message(chat_id=chat_id, message_id=message_id-1)
     except Exception as e:
         logger.error(f"Error deleting previous message: {e}")
-    
     await query.answer()
-    logger.debug("[budget_callback] Query answered")
-    print("[budget_callback] Query answered")
-    
-    # Отправляем сообщение о сохранении бюджета
-    logger.debug(f"[budget_callback] Sending budget_saved message: {budget_saved}")
-    print(f"[budget_callback] Sending budget_saved message: {budget_saved}")
     await query.message.reply_text(budget_saved)
-    logger.debug("[budget_callback] budget_saved message sent")
-    print("[budget_callback] budget_saved message sent")
-    
-    # Устанавливаем флаг, что ждем ответа пользователя
     context.user_data['awaiting_budget_response'] = True
 
 async def location_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обработчик выбора местоположения"""
     query = update.callback_query
     await query.answer()
-    
-    # Удаляем сообщение с кнопками выбора локации
     await query.message.delete()
-    
     language = context.user_data.get('language', 'en')
-    
     if query.data == 'location_near':
-        # Включаем эффект печатания
         await context.bot.send_chat_action(chat_id=query.message.chat_id, action=ChatAction.TYPING)
-        await asyncio.sleep(1)  # Добавляем небольшую задержку
-        
-        # Показываем кнопку только для мобильных
+        await asyncio.sleep(1)
         keyboard = [[KeyboardButton("📍 Мое местоположение", request_location=True)]]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
-        await query.message.reply_text(
-            "Пожалуйста, поделитесь вашим текущим местоположением, я подберу ресторан неподалеку. Или введите район текстом.",
-            reply_markup=reply_markup
-        )
-        # Устанавливаем флаг ожидания локации или района
+        msg = await translate_message('location_send', language)
+        await query.message.reply_text(msg, reply_markup=reply_markup)
         context.user_data['awaiting_location_or_area'] = True
         return
-    
     elif query.data == 'location_area':
-        # Включаем эффект печатания
         await context.bot.send_chat_action(chat_id=query.message.chat_id, action=ChatAction.TYPING)
-        await asyncio.sleep(1)  # Добавляем небольшую задержку
-        
-        # Создаем кнопки районов в два ряда
+        await asyncio.sleep(1)
         areas = list(PHUKET_AREAS.items())
         keyboard = []
         for i in range(0, len(areas), 2):
@@ -479,18 +541,15 @@ async def location_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             if i + 1 < len(areas):
                 row.append(InlineKeyboardButton(areas[i+1][1], callback_data=f'area_{areas[i+1][0]}'))
             keyboard.append(row)
-        
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.message.reply_text("Выберите район из списка или напишите мне более точное место", reply_markup=reply_markup)
-    
+        msg = await translate_message('area_question', language)
+        await query.message.reply_text(msg, reply_markup=reply_markup)
     elif query.data == 'location_any':
-        # Включаем эффект печатания
         await context.bot.send_chat_action(chat_id=query.message.chat_id, action=ChatAction.TYPING)
-        await asyncio.sleep(1)  # Добавляем небольшую задержку
-        
+        await asyncio.sleep(1)
         context.user_data['location'] = 'any'
-        await query.message.reply_text("Хорошо, я буду искать рестораны по всему острову.")
-        # Инициализируем чат с ChatGPT
+        msg = await translate_message('location_any_confirmed', language)
+        await query.message.reply_text(msg)
         q = "Пользователь выбрал язык, бюджет и любое место на острове. Начни диалог." if language == 'ru' else "User selected language, budget and any location on the island. Start the conversation."
         try:
             a, chat_log = ask(q, context.user_data['chat_log'], language)
@@ -504,22 +563,16 @@ async def location_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 async def area_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
-    # Удаляем сообщение с кнопками выбора района
     await query.message.delete()
     language = context.user_data.get('language', 'ru')
-    area_id = query.data.split('_')[1].replace('-', '_')
+    area_id = query.data[len('area_'):]  # Исправлено: теперь корректно для phuket_town, bang_tao и других
     if area_id == 'other':
-        # Если выбран "Другой", просим пользователя ввести место
-        other_message = "Пожалуйста, напишите название района или места, где вы хотите найти ресторан."
-        if language != 'ru':
-            other_message = await translate_message('other_area_prompt', language)
+        other_message = await translate_message('other_area_prompt', language)
         await query.message.reply_text(other_message)
         context.user_data['awaiting_area_input'] = True
         return
     area_name = PHUKET_AREAS[area_id]
     context.user_data['location'] = {'area': area_id, 'name': area_name}
-    # Убираю геокодирование, обновление координат в базе и ChatGPT-диалог
-    # Показываем только список ресторанов
     await show_pretty_restaurants(update, context)
 
 # Новая функция для красивого вывода ресторанов
@@ -825,117 +878,12 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         else:
             await context.bot.send_message(chat_id=update.effective_user.id, text=error_text)
 
-def detect_language(text):
-    """
-    Определяет язык текста с помощью ChatGPT.
-    Возвращает код языка в формате ISO 639-1.
-    """
-    try:
-        # Запрашиваем у ChatGPT определение языка
-        prompt = f"""Определи язык следующего текста и верни только код языка в формате ISO 639-1 (например, 'en' для английского, 'es' для испанского, 'ru' для русского).
-        Текст: "{text}"
-        Ответ должен содержать только код языка, без дополнительных слов или символов."""
-        
-        response = client.chat.completions.create(
-            model="gpt-4",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.1,  # Низкая температура для более точного ответа
-            max_tokens=10
-        )
-        
-        lang = response.choices[0].message.content.strip().lower()
-        logger.info(f"ChatGPT detected language: {lang}")
-        
-        # Специальная обработка для языков
-        if lang in ['es', 'ca', 'gl']:  # Испанский, каталанский, галисийский
-            return 'es'
-        elif lang in ['fr', 'oc']:  # Французский, окситанский
-            return 'fr'
-        elif lang in ['ru', 'uk', 'be']:  # Русский, украинский, белорусский
-            return 'ru'
-        elif lang in ['zh', 'zh_cn', 'zh_tw']:  # Китайский
-            return 'zh'
-        elif lang in ['ar', 'fa', 'ur']:  # Арабский, персидский, урду
-            return 'ar'
-        elif lang in ['th', 'lo']:  # Тайский, лаосский
-            return 'th'
-            
-        return lang
-    except Exception as e:
-        logger.error(f"Error detecting language with ChatGPT: {e}")
-        return 'en'  # По умолчанию английский
-
 async def talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     user_id = user["id"]
     username = user["username"]
-
-    logger.info("Processing message from %s: %s", username, update.message.text)
-
     text = update.message.text.strip()
     detected_lang = detect_language(text)
-    logger.info(f"Detected language: {detected_lang}")
-
-    # --- ДОБАВЛЕНО: обработка ошибочного ввода района для любого текста ---
-    # Проверяем, не команда ли это и не про еду ли текст
-    restaurant_keywords = ['мясо', 'рыба', 'морепродукты', 'тайская', 'итальянская', 'японская', 
-                         'китайская', 'индийская', 'вегетарианская', 'веганская', 'барбекю', 
-                         'стейк', 'суши', 'паста', 'пицца', 'бургер', 'фастфуд', 'кафе', 
-                         'ресторан', 'кухня', 'еда', 'ужин', 'обед', 'завтрак', 'brunch']
-    text_lower = text.lower()
-    is_restaurant_related = any(keyword in text_lower for keyword in restaurant_keywords)
-    is_command = text_lower.startswith('/')
-    # Если это не команда и не про еду, пробуем сопоставить с районом
-    if not is_command and not is_restaurant_related and not context.user_data.get('awaiting_location_or_area') and not context.user_data.get('awaiting_area_input'):
-        try:
-            conn = get_db_connection()
-            cur = conn.cursor()
-            cur.execute("SELECT DISTINCT location FROM restaurants WHERE location IS NOT NULL AND location != ''")
-            all_locations = [row[0] for row in cur.fetchall()]
-            cur.close()
-            conn.close()
-        except Exception as e:
-            logger.error(f"Error fetching locations from DB: {e}")
-            await update.message.reply_text("Ошибка при получении списка локаций из базы данных.")
-            return
-        prompt = (
-            f"Пользователь ввёл: '{text}'. Вот список всех локаций из базы данных: {all_locations}. "
-            "Определи, какая локация из базы наиболее соответствует пользовательскому вводу. "
-            "Верни только точное значение из списка, без пояснений. Если ничего не подходит, верни 'NO_MATCH'."
-        )
-        try:
-            response = client.chat.completions.create(
-                model="gpt-4",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=50
-            )
-            matched_location = response.choices[0].message.content.strip()
-        except Exception as e:
-            logger.error(f"Error in OpenAI location match: {e}")
-            await update.message.reply_text("Ошибка при обработке локации через AI.")
-            return
-        if matched_location == 'NO_MATCH':
-            # Показываем список районов на выбор
-            areas = list(PHUKET_AREAS.items())
-            keyboard = []
-            for i in range(0, len(areas), 2):
-                row = []
-                row.append(InlineKeyboardButton(areas[i][1], callback_data=f'area_{areas[i][0]}'))
-                if i + 1 < len(areas):
-                    row.append(InlineKeyboardButton(areas[i+1][1], callback_data=f'area_{areas[i+1][0]}'))
-                keyboard.append(row)
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await update.message.reply_text("Пожалуйста, выберите район из списка:", reply_markup=reply_markup)
-            return
-        # Сохраняем найденную локацию и ищем рестораны
-        context.user_data['location'] = {'area': matched_location, 'name': matched_location}
-        await update.message.reply_text(f"Отлично, поищем в районе {matched_location}. Что бы вам хотелось сегодня покушать? Я подберу прекрасный вариант и забронирую столик.")
-        await show_pretty_restaurants(update, context)
-        return
-    # --- КОНЕЦ ДОБАВЛЕНИЯ ---
-
-    # Если язык отличается от сохранённого — обновляем в базе и в context
     if context.user_data.get('language') != detected_lang:
         context.user_data['language'] = detected_lang
         try:
@@ -948,6 +896,24 @@ async def talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             logger.info(f"Updated language in DB to {detected_lang} for user {user.id}")
         except Exception as e:
             logger.error(f"Failed to update language in DB: {e}")
+    language = context.user_data.get('language', detected_lang)
+
+    logger.info("Processing message from %s: %s", username, text)
+
+    # --- ДОБАВЛЕНО: обработка ошибочного ввода района для любого текста ---
+    restaurant_keywords = ['мясо', 'рыба', 'морепродукты', 'тайская', 'итальянская', 'японская', 
+                         'китайская', 'индийская', 'вегетарианская', 'веганская', 'барбекю', 
+                         'стейк', 'суши', 'паста', 'пицца', 'бургер', 'фастфуд', 'кафе', 
+                         'ресторан', 'кухня', 'еда', 'ужин', 'обед', 'завтрак', 'brunch']
+    text_lower = text.lower()
+    is_restaurant_related = any(keyword in text_lower for keyword in restaurant_keywords)
+    is_command = text_lower.startswith('/')
+    # Если это не команда и не про еду ли текст
+    if not is_command and not is_restaurant_related and not context.user_data.get('awaiting_location_or_area') and not context.user_data.get('awaiting_area_input'):
+        friendly_msg = "Я могу помочь только с выбором ресторана и бронированием. Расскажите, что бы вы хотели поесть или какой ресторан ищете?"
+        await update.message.reply_text(friendly_msg)
+        return
+    # --- КОНЕЦ ДОБАВЛЕНИЯ ---
 
     # Если это первое сообщение после старта (awaiting_language), то приветствие и кнопки
     if context.user_data.get('awaiting_language'):
@@ -1051,7 +1017,7 @@ async def talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.TYPING)
         await asyncio.sleep(1)  # Добавляем небольшую задержку
         
-        a, chat_log = ask(update.message.text, context.user_data['chat_log'], detected_lang)
+        a, chat_log = ask(text, context.user_data['chat_log'], detected_lang)
         context.user_data['chat_log'] = chat_log
         await update.message.reply_text(a)
     except Exception as e:
@@ -1099,7 +1065,9 @@ async def choose_area_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             row.append(InlineKeyboardButton(areas[i+1][1], callback_data=f'area_{areas[i+1][0]}'))
         keyboard.append(row)
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.message.reply_text("Выберите район из списка или напишите мне более точное место", reply_markup=reply_markup)
+    language = context.user_data.get('language', 'en')
+    msg = await translate_message('choose_area_instruction', language)
+    await query.message.reply_text(msg, reply_markup=reply_markup)
 
 # --- Новый обработчик для кнопки "ПОСМОТРИМ" ---
 async def show_other_price_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
