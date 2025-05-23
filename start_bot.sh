@@ -7,6 +7,12 @@ exec 2> >(tee -a "$LOG_FILE" >&2)
 
 echo "$(date): Starting bot startup script"
 
+# Загрузка переменных окружения из .env
+if [ -f .env ]; then
+    export $(grep -v '^#' .env | xargs)
+    echo "$(date): .env loaded"
+fi
+
 # Функция для проверки статуса
 check_status() {
     if [ $? -eq 0 ]; then

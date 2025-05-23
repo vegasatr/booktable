@@ -273,7 +273,7 @@ BASE_MESSAGES = {
     'location_near': "NEAR ME",
     'location_area': "CHOOSE AREA",
     'location_any': "ANYWHERE",
-    'location_send': "Please send your location:",
+    'location_send': "Please share your current location, I will find a restaurant nearby. Or enter the area as text.",
     'location_thanks': "Thank you! Now I know your location.",
     'area_question': "Choose area:",
     'area_selected': "Great, let's search in the {area} area. What would you like to eat today? I'll find a great option and book a table.",
@@ -295,7 +295,9 @@ async def translate_message(message_key: str, language: str, **kwargs) -> str:
     Переводит сообщение на нужный язык: сначала DeepL, если не сработал — через выбранный ai_engine (OpenAI или ЯндексGPT).
     """
     base = BASE_MESSAGES[message_key].format(**kwargs)
+    logger.info(f"[TRANSLATE] message_key={message_key}, language={language}, base='{base}'")
     if language == 'en':
+        logger.info("[TRANSLATE] Язык английский, возврат без перевода.")
         return base
     # 1. DeepL
     try:
@@ -303,14 +305,21 @@ async def translate_message(message_key: str, language: str, **kwargs) -> str:
         if deepl_api_key:
             url = 'https://api-free.deepl.com/v2/translate'
             params = {
-                'auth_key': deepl_api_key,
                 'text': base,
                 'target_lang': language.upper()
             }
-            resp = requests.post(url, data=params, timeout=20)
+            headers = {
+                'Authorization': f'DeepL-Auth-Key {deepl_api_key}'
+            }
+            logger.info(f"[TRANSLATE] Deepl params: {params}, headers: {headers}")
+            resp = requests.post(url, data=params, headers=headers, timeout=20)
+            logger.info(f"[TRANSLATE] Deepl response status: {resp.status_code}, text: {resp.text}")
             resp.raise_for_status()
             result = resp.json()
+            logger.info(f"[TRANSLATE] Deepl result: {result}")
             return result['translations'][0]['text']
+        else:
+            logger.warning("[TRANSLATE] DEEPL_API_KEY не найден в окружении!")
     except Exception as e:
         logger.error(f"DeepL error: {e}")
     # 2. ai_engine (OpenAI или Яндекс)
@@ -326,6 +335,7 @@ async def translate_message(message_key: str, language: str, **kwargs) -> str:
                 engine = 'yandex'
             if context:
                 context.user_data['ai_engine'] = engine
+        logger.info(f"[TRANSLATE] Используется AI engine: {engine}")
         if engine == 'openai':
             prompt = get_prompt('translate', 'openai', text=base, target_language=language)
             messages = [{"role": "user", "content": prompt}]
@@ -356,6 +366,7 @@ async def translate_message(message_key: str, language: str, **kwargs) -> str:
             return result['result']['alternatives'][0]['message']['text'].strip()
     except Exception as e:
         logger.error(f"Error translating message: {e}")
+    logger.info("[TRANSLATE] Возврат оригинального текста без перевода.")
     return base
 
 # --- Новый универсальный определитель языка ---
