@@ -55,6 +55,12 @@ echo "$(date): Creating new tmux session"
 tmux new-session -d -s mybot
 check_status "Creating tmux session"
 
+# Загружаем переменные окружения из .env
+if [ -f .env ]; then
+    export $(grep -v '^#' .env | xargs)
+    echo "$(date): .env loaded"
+fi
+
 # Запускаем бота
 echo "$(date): Starting bot"
 tmux send-keys -t mybot 'cd /root/booktable_bot' C-m

@@ -273,7 +273,7 @@ BASE_MESSAGES = {
     'location_near': "NEAR ME",
     'location_area': "CHOOSE AREA",
     'location_any': "ANYWHERE",
-    'location_send': "Please send your location:",
+    'location_send': "Please share your current location, and I will find a restaurant nearby. Or enter an area by text.",
     'location_thanks': "Thank you! Now I know your location.",
     'area_question': "Choose area:",
     'area_selected': "Great, let's search in the {area} area. What would you like to eat today? I'll find a great option and book a table.",
@@ -289,13 +289,15 @@ BASE_MESSAGES = {
     'only_restaurant_help': "I can only help with restaurant selection and booking. Tell me what you'd like to eat or which restaurant you're looking for.",
 }
 
+# Стартовый лог для chat_log (чтобы не было ошибки NameError)
+start_convo = []
+
 # --- Универсальный переводчик: сначала DeepL, потом ai_engine ---
 async def translate_message(message_key: str, language: str, **kwargs) -> str:
-    """
-    Переводит сообщение на нужный язык: сначала DeepL, если не сработал — через выбранный ai_engine (OpenAI или ЯндексGPT).
-    """
     base = BASE_MESSAGES[message_key].format(**kwargs)
+    logger.info(f"[translate_message] key={message_key}, lang={language}, base='{base}'")
     if language == 'en':
+        logger.info(f"[translate_message] language is en, return base: '{base}'")
         return base
     # 1. DeepL
     try:
@@ -310,9 +312,11 @@ async def translate_message(message_key: str, language: str, **kwargs) -> str:
             resp = requests.post(url, data=params, timeout=20)
             resp.raise_for_status()
             result = resp.json()
-            return result['translations'][0]['text']
+            translated = result['translations'][0]['text']
+            logger.info(f"[translate_message] DeepL result: '{translated}'")
+            return translated
     except Exception as e:
-        logger.error(f"DeepL error: {e}")
+        logger.error(f"[translate_message] DeepL error: {e}")
     # 2. ai_engine (OpenAI или Яндекс)
     try:
         context = kwargs.get('context', None)
@@ -335,7 +339,9 @@ async def translate_message(message_key: str, language: str, **kwargs) -> str:
                 temperature=0.3,
                 max_tokens=100
             )
-            return response.choices[0].message.content.strip()
+            translated = response.choices[0].message.content.strip()
+            logger.info(f"[translate_message] OpenAI result: '{translated}'")
+            return translated
         elif engine == 'yandex':
             yandex_api_key = os.getenv('YANDEX_GPT_API_KEY')
             yandex_folder_id = os.getenv('YANDEX_FOLDER_ID')
@@ -353,9 +359,12 @@ async def translate_message(message_key: str, language: str, **kwargs) -> str:
             resp = requests.post(url, headers=headers, json=data, timeout=20)
             resp.raise_for_status()
             result = resp.json()
-            return result['result']['alternatives'][0]['message']['text'].strip()
+            translated = result['result']['alternatives'][0]['message']['text'].strip()
+            logger.info(f"[translate_message] Yandex result: '{translated}'")
+            return translated
     except Exception as e:
-        logger.error(f"Error translating message: {e}")
+        logger.error(f"[translate_message] AI-engine error: {e}")
+    logger.info(f"[translate_message] Fallback, return base: '{base}'")
     return base
 
 # --- Новый универсальный определитель языка ---
@@ -503,7 +512,11 @@ async def budget_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await context.bot.send_chat_action(chat_id=query.message.chat_id, action=ChatAction.TYPING)
     budget = query.data.split('_')[1]
     context.user_data['budget'] = budget
-    language = context.user_data.get('language', 'en')
+    # Язык: если не найден — берем из update.effective_user.language_code или 'ru'
+    language = context.user_data.get('language')
+    if not language:
+        language = getattr(update.effective_user, 'language_code', 'ru')[:2]
+        context.user_data['language'] = language
     budget_saved = await translate_message('budget_saved', language)
     await query.message.delete()
     try:
@@ -517,16 +530,17 @@ async def budget_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     context.user_data['awaiting_budget_response'] = True
 
 async def location_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.info(f"[location_callback] Вызван. update={update}, user_data={context.user_data}")
     query = update.callback_query
     await query.answer()
     await query.message.delete()
-    language = context.user_data.get('language', 'en')
+    language = context.user_data.get('language', 'ru')
     if query.data == 'location_near':
         await context.bot.send_chat_action(chat_id=query.message.chat_id, action=ChatAction.TYPING)
         await asyncio.sleep(1)
         keyboard = [[KeyboardButton("📍 Мое местоположение", request_location=True)]]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
-        msg = await translate_message('location_send', language)
+        msg = await translate_message('location_send', language, context=context)
         await query.message.reply_text(msg, reply_markup=reply_markup)
         context.user_data['awaiting_location_or_area'] = True
         return
@@ -723,10 +737,16 @@ async def show_pretty_restaurants(update, context):
                         try:
                             if cuisine:
                                 await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
-                                cuisine = (await ask(f"Переведи на {language} (только тип кухни, без лишних слов): {cuisine}", None, language))[0]
+                                cuisine_trans = (await ask(f"Переведи на {language} (только тип кухни, без лишних слов): {cuisine}", None, language))[0]
+                                if not cuisine_trans or cuisine_trans.strip() == cuisine:
+                                    cuisine_trans = await translate_message('translate', language, text=cuisine)
+                                cuisine = cuisine_trans
                             if desc:
                                 await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
-                                desc = (await ask(f"Переведи на {language} (только краткое описание ресторана, без лишних слов): {desc}", None, language))[0]
+                                desc_trans = (await ask(f"Переведи на {language} (только краткое описание ресторана, без лишних слов): {desc}", None, language))[0]
+                                if not desc_trans or desc_trans.strip() == desc:
+                                    desc_trans = await translate_message('translate', language, text=desc)
+                                desc = desc_trans
                         except Exception as e:
                             logger.error(f"Ошибка перевода описания ресторана: {e}")
                     msg += f"• {r['name']} — {r['average_check']}\n"
@@ -736,11 +756,11 @@ async def show_pretty_restaurants(update, context):
                         msg += f"{desc}\n"
                     msg += "\n"
                 await update.effective_chat.send_message(msg)
-                # AI-комментарий
+                # AI-комментарий и финализация выбора
                 try:
                     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
                     user_history = context.user_data.get('chat_log', [])
-                    user_wish = context.user_data.get('last_user_wish', '')
+                    user_wishes = context.user_data.get('user_wishes', [])
                     rest_summaries = []
                     for r in rows:
                         d = details.get(r['name'], {})
@@ -767,20 +787,22 @@ async def show_pretty_restaurants(update, context):
                         rest_summaries.append(f"{r['name']} — {cuisine}. {desc}")
                     rest_text = '\n'.join(rest_summaries)
                     ban_meal_words = "Не используй слова 'завтрак', 'обед', 'ужин', 'бранч' и любые конкретные приёмы пищи. Не используй фразы про отдых, отпуск, путешествие, не делай предположений о статусе пользователя (турист, экспат, резидент). Используй только нейтральные формулировки: 'вашему визиту', 'посещению', 'опыту', 'впечатлениям' и т.д."
-                    wish_part = f"Учитывай пожелание пользователя: '{user_wish}'. Используй только факты из базы (кухня, особенности, блюда), не выдумывай ничего." if user_wish else "Используй только факты из базы (кухня, особенности, блюда), не выдумывай ничего."
+                    wish_part = f"Учитывай пожелание пользователя: '{user_wishes[-1]}' if user_wishes else 'Используй только факты из базы (кухня, особенности, блюда), не выдумывай ничего.'"
                     if len(rows) == 1:
+                        # Финализация: один ресторан — сразу переходим к бронированию
                         prompt = (
                             f"Пользователь выбрал район и бюджет, вот его история: {user_history}. "
                             f"Вот ресторан, который мы рекомендуем: {rest_text}. "
-                            f"{wish_part} Сделай заманчивое, мотивирующее сообщение (1-2 предложения) про этот ресторан, подчеркни его преимущества, предложи забронировать или задать вопросы. Не используй стандартные приветствия, не повторяй фразы типа 'Я знаю о ресторанах...' или 'Просто расскажите...'. {ban_meal_words} Пиши на языке пользователя ({language}), не упоминай слово 'бот', не повторяй название ресторана."
+                            f"{wish_part} Кратко расскажи о ресторане и задай вопросы для бронирования: сначала спроси количество гостей, затем дату и время. Не используй стандартные приветствия, не повторяй фразы типа 'Я знаю о ресторанах...' или 'Просто расскажите...'. {ban_meal_words} Пиши на языке пользователя ({language}), не упоминай слово 'бот', не повторяй название ресторана."
                         )
                     else:
+                        # 2-3 ресторана — просим выбрать или задать вопросы
                         prompt = (
                             f"Пользователь выбрал район и бюджет, вот его история: {user_history}. "
                             f"Вот список ресторанов, которые мы рекомендуем: {rest_text}. "
-                            f"{wish_part} Помоги пользователю определиться с выбором, кратко подскажи отличия, предложи выбрать или задать вопросы. Не используй стандартные приветствия, не повторяй фразы типа 'Я знаю о ресторанах...' или 'Просто расскажите...'. {ban_meal_words} Пиши на языке пользователя ({language}), не упоминай слово 'бот', не повторяй названия ресторанов."
+                            f"{wish_part} Помоги пользователю определиться с выбором, кратко подскажи отличия, предложи выбрать один ресторан или задать вопросы. Не используй стандартные приветствия, не повторяй фразы типа 'Я знаю о ресторанах...' или 'Просто расскажите...'. {ban_meal_words} Пиши на языке пользователя ({language}), не упоминай слово 'бот', не повторяй названия ресторанов."
                         )
-                    ai_msg, chat_log = ask(prompt, context.user_data.get('chat_log'), language)
+                    ai_msg, chat_log = await ask(prompt, context.user_data.get('chat_log'), language)
                     context.user_data['chat_log'] = chat_log
                     await update.effective_chat.send_message(ai_msg)
                 except Exception as e:
@@ -813,16 +835,27 @@ def get_nearest_area(lat, lon):
     return nearest_area
 
 async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.info(f"[handle_location] Вызван. update={update}, user_data={context.user_data}")
     try:
         logger.info(f"handle_location вызван. update.message: {update.message}")
         # Удаляем отладочный вывод пользователю
         # await update.message.reply_text(f"DEBUG: update.message={update.message}")
         if not hasattr(update.message, 'location') or update.message.location is None:
             error_text = "Похоже, вы не разрешили Telegram доступ к геолокации. Пожалуйста, включите доступ к геолокации для Telegram в настройках телефона и попробуйте ещё раз."
+            language = context.user_data.get('language', 'ru')
+            keyboard = [[
+                InlineKeyboardButton("РЯДОМ", callback_data='location_near'),
+                InlineKeyboardButton("РАЙОН", callback_data='location_area'),
+                InlineKeyboardButton("ВЕЗДЕ", callback_data='location_any')
+            ]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            choose_method_msg = await translate_message('choose_area_instruction', language, context=context)
             if update.message:
-                await update.message.reply_text(error_text)
+                await update.message.reply_text(error_text, reply_markup=ReplyKeyboardRemove())
+                await update.message.reply_text(choose_method_msg, reply_markup=reply_markup)
             else:
                 await context.bot.send_message(chat_id=update.effective_user.id, text=error_text)
+                await context.bot.send_message(chat_id=update.effective_user.id, text=choose_method_msg, reply_markup=reply_markup)
             return
         location = update.message.location
         context.user_data['location'] = {
@@ -951,7 +984,9 @@ async def talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         text_lower = text.lower()
         is_restaurant_related = any(keyword in text_lower for keyword in restaurant_keywords)
         # Сохраняем последнее пожелание пользователя
-        context.user_data['last_user_wish'] = text
+        if 'user_wishes' not in context.user_data:
+            context.user_data['user_wishes'] = []
+        context.user_data['user_wishes'].append(text)
         # Проверяем, не похоже ли на район (старый механизм)
         is_area_like = False
         # Получаем список всех уникальных локаций из базы
@@ -1025,6 +1060,12 @@ async def talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         error_message = await translate_message('error', detected_lang)
         await update.message.reply_text(error_message)
 
+    # Добавляем пожелание в user_wishes
+    if 'user_wishes' not in context.user_data:
+        context.user_data['user_wishes'] = []
+    if text and is_restaurant_related:
+        context.user_data['user_wishes'].append(text)
+
 async def check_budget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Показывает текущий выбранный бюджет"""
     language = context.user_data.get('language', 'en')
@@ -1041,6 +1082,9 @@ async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Перезапуск бота: сброс состояния и стартовое приветствие"""
     # Сброс всех пользовательских данных
     context.user_data.clear()
+    # Убираем все кастомные клавиатуры (в том числе кнопку геолокации)
+    if update.message:
+        await update.message.reply_text("Перезапуск...", reply_markup=ReplyKeyboardRemove())
     # Приветственное сообщение и меню, как при /start
     await start(update, context)
 
@@ -1138,10 +1182,16 @@ async def show_other_price_callback(update: Update, context: ContextTypes.DEFAUL
                     try:
                         if cuisine:
                             await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
-                            cuisine = (await ask(f"Переведи на {language} (только тип кухни, без лишних слов): {cuisine}", None, language))[0]
+                            cuisine_trans = (await ask(f"Переведи на {language} (только тип кухни, без лишних слов): {cuisine}", None, language))[0]
+                            if not cuisine_trans or cuisine_trans.strip() == cuisine:
+                                cuisine_trans = await translate_message('translate', language, text=cuisine)
+                            cuisine = cuisine_trans
                         if desc:
                             await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
-                            desc = (await ask(f"Переведи на {language} (только краткое описание ресторана, без лишних слов): {desc}", None, language))[0]
+                            desc_trans = (await ask(f"Переведи на {language} (только краткое описание ресторана, без лишних слов): {desc}", None, language))[0]
+                            if not desc_trans or desc_trans.strip() == desc:
+                                desc_trans = await translate_message('translate', language, text=desc)
+                            desc = desc_trans
                     except Exception as e:
                         logger.error(f"Ошибка перевода описания ресторана: {e}")
                 msg += f"• {r['name']} — {r['average_check']}\n"
@@ -1151,11 +1201,11 @@ async def show_other_price_callback(update: Update, context: ContextTypes.DEFAUL
                     msg += f"{desc}\n"
                 msg += "\n"
             await update.effective_chat.send_message(msg)
-            # AI-комментарий
+            # AI-комментарий и финализация выбора
             try:
                 await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
                 user_history = context.user_data.get('chat_log', [])
-                user_wish = context.user_data.get('last_user_wish', '')
+                user_wishes = context.user_data.get('user_wishes', [])
                 rest_summaries = []
                 for r in rows:
                     d = details.get(r['name'], {})
@@ -1182,20 +1232,22 @@ async def show_other_price_callback(update: Update, context: ContextTypes.DEFAUL
                     rest_summaries.append(f"{r['name']} — {cuisine}. {desc}")
                 rest_text = '\n'.join(rest_summaries)
                 ban_meal_words = "Не используй слова 'завтрак', 'обед', 'ужин', 'бранч' и любые конкретные приёмы пищи. Не используй фразы про отдых, отпуск, путешествие, не делай предположений о статусе пользователя (турист, экспат, резидент). Используй только нейтральные формулировки: 'вашему визиту', 'посещению', 'опыту', 'впечатлениям' и т.д."
-                wish_part = f"Учитывай пожелание пользователя: '{user_wish}'. Используй только факты из базы (кухня, особенности, блюда), не выдумывай ничего." if user_wish else "Используй только факты из базы (кухня, особенности, блюда), не выдумывай ничего."
+                wish_part = f"Учитывай пожелание пользователя: '{user_wishes[-1]}' if user_wishes else 'Используй только факты из базы (кухня, особенности, блюда), не выдумывай ничего.'"
                 if len(rows) == 1:
+                    # Финализация: один ресторан — сразу переходим к бронированию
                     prompt = (
                         f"Пользователь выбрал район и бюджет, вот его история: {user_history}. "
                         f"Вот ресторан, который мы рекомендуем: {rest_text}. "
-                        f"{wish_part} Сделай заманчивое, мотивирующее сообщение (1-2 предложения) про этот ресторан, подчеркни его преимущества, предложи забронировать или задать вопросы. Не используй стандартные приветствия, не повторяй фразы типа 'Я знаю о ресторанах...' или 'Просто расскажите...'. {ban_meal_words} Пиши на языке пользователя ({language}), не упоминай слово 'бот', не повторяй название ресторана."
+                        f"{wish_part} Кратко расскажи о ресторане и задай вопросы для бронирования: сначала спроси количество гостей, затем дату и время. Не используй стандартные приветствия, не повторяй фразы типа 'Я знаю о ресторанах...' или 'Просто расскажите...'. {ban_meal_words} Пиши на языке пользователя ({language}), не упоминай слово 'бот', не повторяй название ресторана."
                     )
                 else:
+                    # 2-3 ресторана — просим выбрать или задать вопросы
                     prompt = (
                         f"Пользователь выбрал район и бюджет, вот его история: {user_history}. "
                         f"Вот список ресторанов, которые мы рекомендуем: {rest_text}. "
-                        f"{wish_part} Помоги пользователю определиться с выбором, кратко подскажи отличия, предложи выбрать или задать вопросы. Не используй стандартные приветствия, не повторяй фразы типа 'Я знаю о ресторанах...' или 'Просто расскажите...'. {ban_meal_words} Пиши на языке пользователя ({language}), не упоминай слово 'бот', не повторяй названия ресторанов."
+                        f"{wish_part} Помоги пользователю определиться с выбором, кратко подскажи отличия, предложи выбрать один ресторан или задать вопросы. Не используй стандартные приветствия, не повторяй фразы типа 'Я знаю о ресторанах...' или 'Просто расскажите...'. {ban_meal_words} Пиши на языке пользователя ({language}), не упоминай слово 'бот', не повторяй названия ресторанов."
                     )
-                ai_msg, chat_log = ask(prompt, context.user_data.get('chat_log'), language)
+                ai_msg, chat_log = await ask(prompt, context.user_data.get('chat_log'), language)
                 context.user_data['chat_log'] = chat_log
                 await update.effective_chat.send_message(ai_msg)
             except Exception as e:
