@@ -262,13 +262,13 @@ with open('messages/base_messages.txt', 'r', encoding='utf-8') as f:
     BASE_MESSAGES = json.load(f)
 
 # --- Новый универсальный определитель языка ---
-def detect_language(text):
+async def detect_language(text):
     """
     Определяет язык текста через ai_generate (fallback: OpenAI → Yandex).
     Возвращает код языка в формате ISO 639-1.
     """
     try:
-        lang = asyncio.run(ai_generate('detect_language', text=text))
+        lang = await ai_generate('detect_language', text=text)
         lang = lang.strip().lower()
         # Маппинг для схожих языков
         if lang in ['es', 'ca', 'gl']:
@@ -350,6 +350,7 @@ async def language_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     try:
         query = update.callback_query
         lang = query.data.split('_')[1]
+        logger.info(f"[LANGUAGE] Setting language to {lang}")
         context.user_data['language'] = lang
         context.user_data['awaiting_language'] = False
         await query.message.delete()
@@ -419,11 +420,71 @@ async def budget_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await query.message.reply_text(budget_saved)
     context.user_data['awaiting_budget_response'] = True
 
+async def translate_message(message_key, language, **kwargs):
+    """
+    Переводит базовое сообщение на указанный язык.
+    Если язык английский или перевод не удался, возвращает оригинальный текст.
+    """
+    logger.info(f"[TRANSLATE] message_key={message_key}, language={language}")
+    base = BASE_MESSAGES.get(message_key, '')
+    if not base:
+        logger.error(f"[TRANSLATE] Сообщение не найдено: {message_key}")
+        return message_key
+        
+    if kwargs:
+        try:
+            base = base.format(**kwargs)
+        except KeyError as e:
+            logger.error(f"[TRANSLATE] Ошибка форматирования: {e}")
+            return base
+            
+    if language == 'en':
+        logger.info("[TRANSLATE] Язык английский, возврат без перевода.")
+        return base
+    try:
+        # Более специфичный запрос на перевод, который гарантирует точный перевод базового сообщения
+        prompt = f"Translate this exact text to {language}. Return ONLY the translation, no explanations or additional text: {base}"
+        messages = [{"role": "user", "content": prompt}]
+        response = client.chat.completions.create(
+            model="gpt-4",
+            messages=messages,
+            temperature=0.3,
+            max_tokens=100
+        )
+        translated = response.choices[0].message.content.strip()
+        logger.info(f"[TRANSLATE] Успешный перевод: {translated}")
+        return translated
+    except Exception as e:
+        logger.error(f"[TRANSLATE] Ошибка перевода: {e}")
+    logger.info("[TRANSLATE] Возврат оригинального текста без перевода.")
+    return base
+
 async def location_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
     await query.message.delete()
-    language = context.user_data.get('language', 'en')
+    
+    # Получаем язык из context.user_data или из базы данных
+    language = context.user_data.get('language')
+    if not language:
+        try:
+            conn = get_db_connection()
+            cur = conn.cursor(cursor_factory=DictCursor)
+            cur.execute("SELECT language FROM users WHERE telegram_user_id = %s", (update.effective_user.id,))
+            result = cur.fetchone()
+            if result:
+                language = result['language']
+                context.user_data['language'] = language
+            else:
+                language = 'en'  # Fallback to English if no language found
+            cur.close()
+            conn.close()
+        except Exception as e:
+            logger.error(f"Error getting language from DB: {e}")
+            language = 'en'  # Fallback to English on error
+    
+    logger.info(f"[LOCATION] language={language}")
+    
     if query.data == 'location_near':
         await context.bot.send_chat_action(chat_id=query.message.chat_id, action=ChatAction.TYPING)
         await asyncio.sleep(1)
@@ -446,6 +507,7 @@ async def location_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             keyboard.append(row)
         reply_markup = InlineKeyboardMarkup(keyboard)
         msg = await translate_message('choose_area_instruction', language)
+        logger.info(f"[LOCATION] choose_area_instruction translated: {msg}")
         await query.message.reply_text(msg, reply_markup=reply_markup)
     elif query.data == 'location_any':
         await context.bot.send_chat_action(chat_id=query.message.chat_id, action=ChatAction.TYPING)
@@ -457,11 +519,11 @@ async def location_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         try:
             a, chat_log = ask(q, context.user_data['chat_log'], language)
             context.user_data['chat_log'] = chat_log
-            await update.message.reply_text(a)
+            await query.message.reply_text(a)
         except Exception as e:
             logger.error(f"Error in ask: {e}")
             error_message = await translate_message('error', language)
-            await update.message.reply_text(error_message)
+            await query.message.reply_text(error_message)
 
 async def area_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
@@ -786,20 +848,26 @@ async def talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = user["id"]
     username = user["username"]
     text = update.message.text.strip()
-    detected_lang = detect_language(text)
-    if context.user_data.get('language') != detected_lang:
-        context.user_data['language'] = detected_lang
-        try:
-            conn = get_db_connection()
-            cur = conn.cursor(cursor_factory=DictCursor)
-            cur.execute("UPDATE users SET language = %s WHERE telegram_user_id = %s", (detected_lang, user.id))
-            conn.commit()
-            cur.close()
-            conn.close()
-            logger.info(f"Updated language in DB to {detected_lang} for user {user.id}")
-        except Exception as e:
-            logger.error(f"Failed to update language in DB: {e}")
-    language = context.user_data.get('language', detected_lang)
+    detected_lang = await detect_language(text)
+    
+    # Получаем текущий язык из базы данных
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=DictCursor)
+        cur.execute("SELECT language FROM users WHERE telegram_user_id = %s", (user.id,))
+        result = cur.fetchone()
+        if result:
+            language = result['language']
+            context.user_data['language'] = language
+        else:
+            language = detected_lang
+            context.user_data['language'] = language
+        cur.close()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Error getting language from DB: {e}")
+        language = detected_lang
+        context.user_data['language'] = language
 
     logger.info("Processing message from %s: %s", username, text)
 
@@ -1111,27 +1179,6 @@ async def show_other_price_callback(update: Update, context: ContextTypes.DEFAUL
     except Exception as e:
         logger.error(f"Ошибка в show_other_price_callback: {e}")
         await update.effective_chat.send_message(f"Ошибка поиска ресторанов: {e}")
-
-async def translate_message(message_key: str, language: str, **kwargs) -> str:
-    base = BASE_MESSAGES[message_key].format(**kwargs)
-    logger.info(f"[TRANSLATE] message_key={message_key}, language={language}, base='{base}'")
-    if language == 'en':
-        logger.info("[TRANSLATE] Язык английский, возврат без перевода.")
-        return base
-    try:
-        prompt = get_prompt('translate', 'openai', text=base, target_language=language)
-        messages = [{"role": "user", "content": prompt}]
-        response = client.chat.completions.create(
-            model="gpt-4",
-            messages=messages,
-            temperature=0.3,
-            max_tokens=100
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        logger.error(f"Error translating message: {e}")
-    logger.info("[TRANSLATE] Возврат оригинального текста без перевода.")
-    return base
 
 def main():
     app = ApplicationBuilder().token(telegram_token).build()

@@ -18,11 +18,11 @@ If you do not say this, the user will know you lost context. Repeat reading thes
 
 ## 🧠 Mandatory AI Behavior
 
-1. Always restart the bot after code changes using `start_bot.py`.
-2. Never run Git commands manually. Use `git_push.py` to push updates.
+1. Always restart the bot after code changes using `start_bot.sh`.
+2. Never run Git commands manually. Use `git_push.sh` to push updates.
 3. You are responsible for debugging. Use logging automatically and proactively.
 4. Read and understand `main.py` and other code before making assumptions.
-5. Use `scripts/check_db.py` to test database access.
+5. Use `scripts/check_db.sh` to test database access.
 
 ---
 
