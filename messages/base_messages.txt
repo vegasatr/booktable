@@ -23,5 +23,7 @@
     "another_price_not_found": "There are no restaurants in other price categories in this area. Try another area.",
     "area_not_found": "Error: could not determine the area for restaurant search.",
     "search_error": "Error searching for restaurants: {error}",
-    "only_restaurant_help": "I can only help with restaurant selection and booking. Tell me what you'd like to eat or which restaurant you're looking for."
+    "only_restaurant_help": "I can only help with restaurant selection and booking. Tell me what you'd like to eat or which restaurant you're looking for.",
+    "restaurant_recommendation": "Let me recommend you to visit:",
+    "consultation_welcome": "I'm here to help you choose the best restaurant. Feel free to ask any questions about the restaurants I've shown you."
 } 

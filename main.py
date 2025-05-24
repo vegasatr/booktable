@@ -540,12 +540,36 @@ async def area_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     context.user_data['location'] = {'area': area_id, 'name': area_name}
     await show_pretty_restaurants(update, context)
 
+# --- Новая функция для перевода текста через AI ---
+async def translate_text(text: str, target_language: str) -> str:
+    """
+    Простая функция для перевода текста через AI.
+    Использует OpenAI для перевода, возвращает оригинальный текст в случае ошибки.
+    """
+    try:
+        prompt = f"Translate this text to {target_language}. Return ONLY the translation, no explanations: {text}"
+        messages = [{"role": "user", "content": prompt}]
+        response = client.chat.completions.create(
+            model="gpt-4",
+            messages=messages,
+            temperature=0.3,
+            max_tokens=100
+        )
+        translated = response.choices[0].message.content.strip()
+        logger.info(f"[TRANSLATE_TEXT] Translated '{text}' to '{translated}'")
+        return translated
+    except Exception as e:
+        logger.error(f"[TRANSLATE_TEXT] Error translating text: {e}")
+        return text
+
 # Новая функция для красивого вывода ресторанов
 async def show_pretty_restaurants(update, context):
     """Показывает красиво оформленный список подходящих ресторанов"""
     location = context.user_data.get('location')
     budget = context.user_data.get('budget')
     language = context.user_data.get('language', 'ru')
+
+    logger.info(f"[SHOW_RESTAURANTS] Starting with location={location}, budget={budget}, language={language}")
 
     # Для строкового фильтра по бюджету
     budget_map = {
@@ -555,187 +579,93 @@ async def show_pretty_restaurants(update, context):
         '4': '$$$$'
     }
     budget_str = budget_map.get(budget, None)
+    logger.info(f"[SHOW_RESTAURANTS] Using budget_str={budget_str}")
 
     try:
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=DictCursor)
-        found_other_price = False
-        other_price_rows = []
 
         if isinstance(location, dict) and 'area' in location:
-            if budget_str:
-                # Специальная обработка для Пхукет-Таун
-                if location['area'] == 'phuket_town':
-                    cur.execute(
-                        """
-                        SELECT name, average_check, location FROM restaurants
-                        WHERE (LOWER(location) ILIKE %s OR LOWER(location) ILIKE %s OR LOWER(location) ILIKE %s)
-                        AND average_check::text = %s AND active ILIKE 'true'
-                        ORDER BY name
-                        """,
-                        ('%phuket town%', '%phuket-town%', '%phuket_town%', budget_str)
-                    )
-                else:
-                    smart_area = location['area'].lower().replace(' ', '').replace(',', '')
-                    smart_name = location['name'].lower().replace(' ', '').replace(',', '')
-                    cur.execute(
-                        """
-                        SELECT name, average_check, location FROM restaurants
-                        WHERE (REPLACE(REPLACE(LOWER(location), ' ', ''), ',', '') ILIKE %s OR REPLACE(REPLACE(LOWER(location), ' ', ''), ',', '') ILIKE %s)
-                        AND average_check::text = %s AND active ILIKE 'true'
-                        ORDER BY name
-                        """,
-                        (f"%{smart_area}%", f"%{smart_name}%", budget_str)
-                    )
-                rows = cur.fetchall()
-                # Проверяем, есть ли другие рестораны в этом районе с другим чеком
-                if location['area'] == 'phuket_town':
-                    cur.execute(
-                        """
-                        SELECT name, average_check, location FROM restaurants
-                        WHERE (LOWER(location) ILIKE %s OR LOWER(location) ILIKE %s OR LOWER(location) ILIKE %s)
-                        AND average_check::text != %s AND active ILIKE 'true'
-                        ORDER BY name
-                        """,
-                        ('%phuket town%', '%phuket-town%', '%phuket_town%', budget_str)
-                    )
-                else:
-                    cur.execute(
-                        """
-                        SELECT name, average_check, location FROM restaurants
-                        WHERE (REPLACE(REPLACE(LOWER(location), ' ', ''), ',', '') ILIKE %s OR REPLACE(REPLACE(LOWER(location), ' ', ''), ',', '') ILIKE %s)
-                        AND average_check::text != %s AND active ILIKE 'true'
-                        ORDER BY name
-                        """,
-                        (f"%{smart_area}%", f"%{smart_name}%", budget_str)
-                    )
-                other_price_rows = cur.fetchall()
-                found_other_price = bool(other_price_rows)
+            smart_area = location['area'].lower().replace(' ', '').replace(',', '')
+            smart_name = location['name'].lower().replace(' ', '').replace(',', '')
+            logger.info(f"[SHOW_RESTAURANTS] Using smart_area={smart_area}, smart_name={smart_name}")
+            query = """
+                SELECT r.name, r.average_check, r.location, r.cuisine, r.features
+                FROM restaurants r
+                WHERE (REPLACE(REPLACE(LOWER(r.location), ' ', ''), ',', '') ILIKE %s OR REPLACE(REPLACE(LOWER(r.location), ' ', ''), ',', '') ILIKE %s)
+                AND r.average_check::text = %s AND r.active ILIKE 'true'
+                ORDER BY r.name
+            """
+            params = (f"%{smart_area}%", f"%{smart_name}%", budget_str)
 
-                if not rows and found_other_price and other_price_rows:
-                    area_name = location['name'] if isinstance(location, dict) and 'name' in location else 'выбранном районе'
-                    msg = f"Увы, но в районе {area_name} нет ресторанов со средним чеком {budget_str}, которые соответствуют высоким стандартам качества BookTable.AI. Но есть рестораны в другой ценовой категории. Посмотрите их или поищем в другом районе?\n\n"
-                    for r in other_price_rows:
-                        msg += f"• {r['name']} — {r['average_check']}\n"
-                    keyboard = [
-                        [InlineKeyboardButton("ПОСМОТРИМ", callback_data="show_other_price")],
-                        [InlineKeyboardButton("ДРУГОЙ РАЙОН", callback_data="choose_area")]
-                    ]
-                    reply_markup = InlineKeyboardMarkup(keyboard)
-                    await update.effective_chat.send_message(msg, reply_markup=reply_markup)
-                    return
-                elif not rows:
-                    msg = "К сожалению, в этом районе пока нет подходящих ресторанов по выбранным параметрам. Попробуйте выбрать другой район или изменить бюджет."
-                    await update.effective_chat.send_message(msg)
-                    return
-                else:
-                    # Если найдено 1-3 ресторана — выводим расширенную информацию и AI-комментарий
-                    if 1 <= len(rows) <= 3:
-                        # Получаем подробную информацию о ресторанах
-                        restaurant_ids = tuple([r['name'] for r in rows])
-                        # Формируем SQL для получения кухни и описания
-                        cur2 = conn.cursor(cursor_factory=DictCursor)
-                        names = tuple([r['name'] for r in rows])
-                        # Используем параметризованный запрос для избежания ошибок с апострофами
-                        cur2.execute(
-                            """
-                            SELECT name, average_check, cuisine, features, atmosphere, story_or_concept
-                            FROM restaurants
-                            WHERE name IN %s
-                            """,
-                            (names,)
-                        )
-                        details = {r['name']: r for r in cur2.fetchall()}
-                        msg = "Рестораны, которые мы рекомендуем в этом районе:\n\n"
-                        for r in rows:
-                            d = details.get(r['name'], {})
-                            cuisine = d.get('cuisine') or ''
-                            features = d.get('features')
-                            if isinstance(features, list):
-                                features = ', '.join(features)
-                            elif features is None:
-                                features = ''
-                            atmosphere = d.get('atmosphere') or ''
-                            story = d.get('story_or_concept') or ''
-                            desc = features or atmosphere or story
-                            # Переводим cuisine и описание только через OpenAI, явно указывая язык
-                            if language != 'en':
-                                try:
-                                    if cuisine:
-                                        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
-                                        cuisine = (await ask(f"Переведи на {language} (только тип кухни, без лишних слов): {cuisine}", None, language))[0]
-                                    if desc:
-                                        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
-                                        desc = (await ask(f"Переведи на {language} (только краткое описание ресторана, без лишних слов): {desc}", None, language))[0]
-                                except Exception as e:
-                                    logger.error(f"Ошибка перевода описания ресторана: {e}")
-                            msg += f"• {r['name']} — {r['average_check']}\n"
-                            if cuisine:
-                                msg += f"{cuisine}\n"
-                            if desc:
-                                msg += f"{desc}\n"
-                            msg += "\n"
-                        await update.effective_chat.send_message(msg)
-                        # AI-комментарий
-                        try:
-                            await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
-                            user_history = context.user_data.get('chat_log', [])
-                            user_wish = context.user_data.get('last_user_wish', '')
-                            rest_summaries = []
-                            for r in rows:
-                                d = details.get(r['name'], {})
-                                cuisine = d.get('cuisine') or ''
-                                features = d.get('features')
-                                if isinstance(features, list):
-                                    features = ', '.join(features)
-                                elif features is None:
-                                    features = ''
-                                atmosphere = d.get('atmosphere') or ''
-                                story = d.get('story_or_concept') or ''
-                                desc = features or atmosphere or story
-                                # Переводим cuisine и описание для AI только через OpenAI
-                                if language != 'en':
-                                    try:
-                                        if cuisine:
-                                            await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
-                                            cuisine = (await ask(f"Переведи на {language} (только тип кухни, без лишних слов): {cuisine}", None, language))[0]
-                                        if desc:
-                                            await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
-                                            desc = (await ask(f"Переведи на {language} (только краткое описание ресторана, без лишних слов): {desc}", None, language))[0]
-                                    except Exception as e:
-                                        logger.error(f"Ошибка перевода описания ресторана: {e}")
-                                rest_summaries.append(f"{r['name']} — {cuisine}. {desc}")
-                            rest_text = '\n'.join(rest_summaries)
-                            ban_meal_words = "Не используй слова 'завтрак', 'обед', 'ужин', 'бранч' и любые конкретные приёмы пищи. Не используй фразы про отдых, отпуск, путешествие, не делай предположений о статусе пользователя (турист, экспат, резидент). Используй только нейтральные формулировки: 'вашему визиту', 'посещению', 'опыту', 'впечатлениям' и т.д."
-                            wish_part = f"Учитывай пожелание пользователя: '{user_wish}'. Используй только факты из базы (кухня, особенности, блюда), не выдумывай ничего." if user_wish else "Используй только факты из базы (кухня, особенности, блюда), не выдумывай ничего."
-                            if len(rows) == 1:
-                                prompt = (
-                                    f"Пользователь выбрал район и бюджет, вот его история: {user_history}. "
-                                    f"Вот ресторан, который мы рекомендуем: {rest_text}. "
-                                    f"{wish_part} Сделай заманчивое, мотивирующее сообщение (1-2 предложения) про этот ресторан, подчеркни его преимущества, предложи забронировать или задать вопросы. Не используй стандартные приветствия, не повторяй фразы типа 'Я знаю о ресторанах...' или 'Просто расскажите...'. {ban_meal_words} Пиши на языке пользователя ({language}), не упоминай слово 'бот', не повторяй название ресторана."
-                                )
-                            else:
-                                prompt = (
-                                    f"Пользователь выбрал район и бюджет, вот его история: {user_history}. "
-                                    f"Вот список ресторанов, которые мы рекомендуем: {rest_text}. "
-                                    f"{wish_part} Помоги пользователю определиться с выбором, кратко подскажи отличия, предложи выбрать или задать вопросы. Не используй стандартные приветствия, не повторяй фразы типа 'Я знаю о ресторанах...' или 'Просто расскажите...'. {ban_meal_words} Пиши на языке пользователя ({language}), не упоминай слово 'бот', не повторяй названия ресторанов."
-                                )
-                            ai_msg, chat_log = ask(prompt, context.user_data.get('chat_log'), language)
-                            context.user_data['chat_log'] = chat_log
-                            await update.effective_chat.send_message(ai_msg)
-                        except Exception as e:
-                            logger.error(f"Ошибка генерации AI-комментария: {e}")
-                        return
-                    # Если больше 3 ресторанов — обычный список
-                    msg = "Рестораны, которые мы рекомендуем в этом районе:\n\n"
-                    for r in rows:
-                        msg += f"• {r['name']} — {r['average_check']}\n"
-                    await update.effective_chat.send_message(msg)
-                    return
-            cur.close()
-            conn.close()
+            logger.info(f"[SHOW_RESTAURANTS] Executing query: {query}")
+            logger.info(f"[SHOW_RESTAURANTS] With params: {params}")
+            
+            cur.execute(query, params)
+            rows = cur.fetchall()
+            logger.info(f"[SHOW_RESTAURANTS] Found {len(rows)} restaurants")
+            
+            if not rows:
+                msg = await translate_message('no_restaurants_found', language)
+                await update.effective_chat.send_message(msg)
+                cur.close()
+                conn.close()
+                return
+
+            # Отправляем сообщение с рекомендацией
+            recommendation_msg = await translate_message('restaurant_recommendation', language)
+            await update.effective_chat.send_message(recommendation_msg)
+
+            # Формируем и отправляем информацию о каждом ресторане
+            for r in rows:
+                logger.info(f"[SHOW_RESTAURANTS] Processing restaurant: {r['name']}")
+                logger.info(f"[SHOW_RESTAURANTS] Raw data from DB: {dict(r)}")
+                
+                msg = f"• {r['name']}\n"
+                # Переводим кухню
+                if r['cuisine']:
+                    translated_cuisine = await translate_text(r['cuisine'], language)
+                    msg += f"{translated_cuisine}\n"
+                msg += f"{r['average_check']}\n"
+                # Переводим особенности
+                if r['features']:
+                    features_text = r['features']
+                    if isinstance(features_text, list):
+                        features_text = ', '.join(features_text)
+                    translated_features = await translate_text(features_text, language)
+                    msg += f"{translated_features}\n"
+                logger.info(f"[SHOW_RESTAURANTS] Final message to send: {msg}")
+                await update.effective_chat.send_message(msg)
+
+            # Сохраняем информацию о ресторанах для последующего использования
+            context.user_data['filtered_restaurants'] = [dict(r) for r in rows]
+            logger.info(f"[SHOW_RESTAURANTS] Saved {len(rows)} restaurants to context")
+
+            # Создаем кнопки действий
+            keyboard = [
+                [
+                    InlineKeyboardButton("БРОНИРУЮ", callback_data="book_restaurant"),
+                    InlineKeyboardButton("ЕСТЬ ВОПРОС", callback_data="ask_about_restaurant"),
+                    InlineKeyboardButton("ДРУГОЙ РАЙОН", callback_data="choose_area")
+                ]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+            # Устанавливаем режим консультации
+            context.user_data['consultation_mode'] = True
+            context.user_data['restaurant_info'] = "\n".join([
+                f"Restaurant: {r['name']}\nCuisine: {r['cuisine']}\nFeatures: {r['features']}" for r in rows
+            ])
+
+            # Отправляем приветственное сообщение
+            welcome_msg = await translate_message('consultation_welcome', language)
+            await update.effective_chat.send_message(welcome_msg, reply_markup=reply_markup)
+
+        cur.close()
+        conn.close()
     except Exception as e:
-        logger.error(f"Error in show_pretty_restaurants: {e}")
+        logger.error(f"[SHOW_RESTAURANTS] Error: {e}")
+        logger.exception("[SHOW_RESTAURANTS] Full traceback:")
         await update.effective_chat.send_message(f"Ошибка поиска ресторанов: {e}")
 
 def get_nearest_area(lat, lon):
@@ -846,21 +776,6 @@ async def talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     logger.info("Processing message from %s: %s", username, text)
 
-    # --- ДОБАВЛЕНО: обработка ошибочного ввода района для любого текста ---
-    restaurant_keywords = ['мясо', 'рыба', 'морепродукты', 'тайская', 'итальянская', 'японская', 
-                         'китайская', 'индийская', 'вегетарианская', 'веганская', 'барбекю', 
-                         'стейк', 'суши', 'паста', 'пицца', 'бургер', 'фастфуд', 'кафе', 
-                         'ресторан', 'кухня', 'еда', 'ужин', 'обед', 'завтрак', 'brunch']
-    text_lower = text.lower()
-    is_restaurant_related = any(keyword in text_lower for keyword in restaurant_keywords)
-    is_command = text_lower.startswith('/')
-    # Если это не команда и не про еду ли текст
-    if not is_command and not is_restaurant_related and not context.user_data.get('awaiting_location_or_area') and not context.user_data.get('awaiting_area_input'):
-        friendly_msg = "Я могу помочь только с выбором ресторана и бронированием. Расскажите, что бы вы хотели поесть или какой ресторан ищете?"
-        await update.message.reply_text(friendly_msg)
-        return
-    # --- КОНЕЦ ДОБАВЛЕНИЯ ---
-
     # Если это первое сообщение после старта (awaiting_language), то приветствие и кнопки
     if context.user_data.get('awaiting_language'):
         context.user_data['awaiting_language'] = False
@@ -889,73 +804,20 @@ async def talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         # Включаем эффект печатания
         await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.TYPING)
         await asyncio.sleep(1)  # Добавляем небольшую задержку
-        # Проверяем, относится ли ответ к ресторанам
-        restaurant_keywords = ['мясо', 'рыба', 'морепродукты', 'тайская', 'итальянская', 'японская', 
-                             'китайская', 'индийская', 'вегетарианская', 'веганская', 'барбекю', 
-                             'стейк', 'суши', 'паста', 'пицца', 'бургер', 'фастфуд', 'кафе', 
-                             'ресторан', 'кухня', 'еда', 'ужин', 'обед', 'завтрак', 'brunch']
-        text_lower = text.lower()
-        is_restaurant_related = any(keyword in text_lower for keyword in restaurant_keywords)
+        
         # Сохраняем последнее пожелание пользователя
         context.user_data['last_user_wish'] = text
-        # Проверяем, не похоже ли на район (старый механизм)
-        is_area_like = False
-        # Получаем список всех уникальных локаций из базы
-        try:
-            conn = get_db_connection()
-            cur = conn.cursor()
-            cur.execute("SELECT DISTINCT location FROM restaurants WHERE location IS NOT NULL AND location != ''")
-            all_locations = [row[0] for row in cur.fetchall()]
-            cur.close()
-            conn.close()
-        except Exception as e:
-            logger.error(f"Error fetching locations from DB: {e}")
-            all_locations = []
-        # Используем OpenAI для сопоставления пользовательского ввода с локациями из базы
-        if all_locations:
-            prompt = (
-                f"Пользователь ввёл: '{text}'. Вот список всех локаций из базы данных: {all_locations}. "
-                "Определи, какая локация из базы наиболее соответствует пользовательскому вводу. "
-                "Верни только точное значение из списка, без пояснений. Если ничего не подходит, верни 'NO_MATCH'."
-            )
-            try:
-                matched_location = (await ask(prompt, None, detected_lang))[0].strip()
-                is_area_like = matched_location != 'NO_MATCH'
-            except Exception as e:
-                logger.error(f"Error in OpenAI location match: {e}")
-                is_area_like = False
-        # Логика выбора реакции
-        if is_restaurant_related:
-            # Показываем кнопки выбора локации в одну строку
-            keyboard = [[
-                InlineKeyboardButton("РЯДОМ", callback_data='location_near'),
-                InlineKeyboardButton("РАЙОН", callback_data='location_area'),
-                InlineKeyboardButton("ВЕЗДЕ", callback_data='location_any')
-            ]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            location_message = "Подберу для Вас отличный ресторан! Поискать поблизости, в другом районе или в любом месте на Пхукете?"
-            await update.message.reply_text(location_message, reply_markup=reply_markup)
-            return
-        elif is_area_like:
-            # Сохраняем найденную локацию и ищем рестораны
-            context.user_data['location'] = {'area': matched_location, 'name': matched_location}
-            await update.message.reply_text(f"Отлично, поищем в районе {matched_location}. Что бы вам хотелось сегодня покушать? Я подберу прекрасный вариант и забронирую столик.")
-            await show_pretty_restaurants(update, context)
-            return
-        else:
-            # Не про еду и не район — отдельный промт для болтовни
-            try:
-                await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.TYPING)
-                await asyncio.sleep(1)
-                flexible_prompt = f"Пользователь написал: '{text}'. Ответь остроумно, дружелюбно, но мягко верни разговор к выбору ресторана. Не используй шаблонные фразы, не повторяй приветствие. Пиши на языке пользователя ({detected_lang})."
-                a, chat_log = ask(flexible_prompt, context.user_data['chat_log'], detected_lang)
-                context.user_data['chat_log'] = chat_log
-                await update.message.reply_text(a)
-            except Exception as e:
-                logger.error(f"Error in ask: {e}")
-                error_message = await translate_message('error', detected_lang)
-                await update.message.reply_text(error_message)
-            return
+
+        # Показываем кнопки выбора локации в одну строку
+        keyboard = [[
+            InlineKeyboardButton("РЯДОМ", callback_data='location_near'),
+            InlineKeyboardButton("РАЙОН", callback_data='location_area'),
+            InlineKeyboardButton("ВЕЗДЕ", callback_data='location_any')
+        ]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        location_message = "Подберу для Вас отличный ресторан! Поискать поблизости, в другом районе или в любом месте на Пхукете?"
+        await update.message.reply_text(location_message, reply_markup=reply_markup)
+        return
 
     # Все остальные сообщения — обычный диалог
     try:
@@ -963,12 +825,29 @@ async def talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.TYPING)
         await asyncio.sleep(1)  # Добавляем небольшую задержку
         
-        a, chat_log = ask(text, context.user_data['chat_log'], detected_lang)
+        # Если у нас есть информация о ресторанах и мы в режиме консультации
+        if context.user_data.get('consultation_mode') and context.user_data.get('filtered_restaurants'):
+            restaurants = context.user_data['filtered_restaurants']
+            restaurant_info = "\n".join([
+                f"Restaurant: {r['name']}\n"
+                f"Cuisine: {r['cuisine']}\n"
+                f"Features: {r['features']}\n"
+                f"Atmosphere: {r['atmosphere']}\n"
+                f"Story: {r['story_or_concept']}\n"
+                for r in restaurants
+            ])
+            prompt = f"Пользователь спрашивает: '{text}'. Вот информация о ресторанах: {restaurant_info}. Ответь на вопрос пользователя, используя только информацию из базы данных. Не упоминай рестораны, которых нет в списке. Пиши на языке пользователя ({language})."
+            a, chat_log = ask(prompt, context.user_data['chat_log'], language)
+            context.user_data['chat_log'] = chat_log
+            await update.message.reply_text(a)
+        else:
+            # Обычный диалог
+            a, chat_log = ask(text, context.user_data['chat_log'], language)
         context.user_data['chat_log'] = chat_log
         await update.message.reply_text(a)
     except Exception as e:
         logger.error("Error in ask: %s", e)
-        error_message = await translate_message('error', detected_lang)
+        error_message = await translate_message('error', language)
         await update.message.reply_text(error_message)
 
 async def check_budget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1155,6 +1034,52 @@ async def show_other_price_callback(update: Update, context: ContextTypes.DEFAUL
         logger.error(f"Ошибка в show_other_price_callback: {e}")
         await update.effective_chat.send_message(f"Ошибка поиска ресторанов: {e}")
 
+# Добавляем новые обработчики для кнопок
+async def book_restaurant_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    await query.message.delete()
+    # TODO: Реализовать логику бронирования
+    await update.effective_chat.send_message("Функция бронирования будет доступна в следующем обновлении.")
+
+async def ask_about_restaurant_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    await query.message.delete()
+    
+    # Получаем информацию о ресторанах
+    restaurants = context.user_data.get('filtered_restaurants', [])
+    if not restaurants:
+        await update.effective_chat.send_message("Извините, информация о ресторанах недоступна. Пожалуйста, начните поиск заново.")
+        return
+
+    # Получаем предпочтения пользователя
+    user_wish = context.user_data.get('last_user_wish', '')
+    language = context.user_data.get('language', 'ru')
+
+    # Формируем контекст для ChatGPT
+    restaurant_info = "\n".join([
+        f"Restaurant: {r['name']}\n"
+        f"Cuisine: {r['cuisine']}\n"
+        f"Average check: {r['average_check']}\n"
+        f"Features: {r['features']}\n"
+        f"Atmosphere: {r['atmosphere']}\n"
+        f"Story: {r['story_or_concept']}\n"
+        for r in restaurants
+    ])
+
+    # Устанавливаем флаг, что мы в режиме консультации
+    context.user_data['consultation_mode'] = True
+    context.user_data['restaurant_info'] = restaurant_info
+
+    # Отправляем приветственное сообщение с учетом предпочтений
+    if user_wish:
+        welcome_msg = f"Я вижу, что вы ищете ресторан с {user_wish}. Давайте я помогу вам выбрать лучший вариант из предложенных ресторанов. Задавайте любые вопросы о них."
+    else:
+        welcome_msg = await translate_message('consultation_welcome', language)
+    
+    await update.effective_chat.send_message(welcome_msg)
+
 def main():
     app = ApplicationBuilder().token(telegram_token).build()
     
@@ -1169,8 +1094,10 @@ def main():
     app.add_handler(CallbackQueryHandler(location_callback, pattern="^location_"))
     app.add_handler(CallbackQueryHandler(area_callback, pattern="^area_"))
     app.add_handler(CallbackQueryHandler(choose_area_callback, pattern="^choose_area$"))
-    # Новый обработчик для кнопки ПОСМОТРИМ
     app.add_handler(CallbackQueryHandler(show_other_price_callback, pattern="^show_other_price$"))
+    # Новые обработчики
+    app.add_handler(CallbackQueryHandler(book_restaurant_callback, pattern="^book_restaurant$"))
+    app.add_handler(CallbackQueryHandler(ask_about_restaurant_callback, pattern="^ask_about_restaurant$"))
     
     # Обработчики сообщений
     app.add_handler(MessageHandler(filters.LOCATION, handle_location))
