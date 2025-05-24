@@ -23,6 +23,7 @@ If you do not say this, the user will know you lost context. Repeat reading thes
 3. You are responsible for debugging. Use logging automatically and proactively.
 4. Read and understand `main.py` and other code before making assumptions.
 5. Use `scripts/check_db.sh` to test database access.
+6. Always respond to the user in Russian language only.
 
 ---
 
@@ -45,7 +46,7 @@ If you do not say this, the user will know you lost context. Repeat reading thes
 
 ## ✅ Command Enforcement
 
-If user says “push to Git” or “restart bot”, always respond:
+If user says "push to Git" or "restart bot", always respond:
 
 > "Understood. Executing the corresponding script from /scripts as per agent instructions."
 
