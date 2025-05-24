@@ -194,10 +194,6 @@ async def ai_generate(task, text=None, target_language=None, preferences=None, c
     if engine == 'yandex':
         try:
             logger.info("[AI] YandexGPT fallback for generation...")
-            yandex_api_key = os.getenv('YANDEX_GPT_API_KEY')
-            yandex_folder_id = os.getenv('YANDEX_FOLDER_ID')
-            if not yandex_api_key or not yandex_folder_id:
-                raise Exception('YANDEX_GPT_API_KEY or YANDEX_FOLDER_ID not set')
             if task == 'restaurant_recommendation':
                 prompt = get_prompt('restaurant_recommendation', 'yandex', preferences=preferences, target_language=target_language)
             elif task == 'greet':
@@ -208,11 +204,11 @@ async def ai_generate(task, text=None, target_language=None, preferences=None, c
                 prompt = get_prompt('fallback_error', 'yandex')
             url = 'https://llm.api.cloud.yandex.net/foundationModels/v1/completion'
             headers = {
-                'Authorization': f'Api-Key {yandex_api_key}',
+                'Authorization': f'Api-Key {os.getenv("YANDEX_GPT_API_KEY")}',
                 'Content-Type': 'application/json'
             }
             data = {
-                "modelUri": f"gpt://{yandex_folder_id}/yandexgpt/latest",
+                "modelUri": f"gpt://{os.getenv('YANDEX_FOLDER_ID')}/yandexgpt/latest",
                 "completionOptions": {"stream": False, "temperature": 0.7, "maxTokens": 1000},
                 "messages": [{"role": "user", "text": prompt}]
             }
@@ -222,6 +218,8 @@ async def ai_generate(task, text=None, target_language=None, preferences=None, c
             try:
                 result = resp.json()
                 text = result['result']['alternatives'][0]['message']['text'].strip()
+                logger.debug(f"[TRANSLATE] DeepL response JSON: {result}")
+                logger.debug(f"[TRANSLATE] Translated text: {result['translations'][0]['text']}")
                 return text
             except Exception as parse_e:
                 logger.error(f"YandexGPT response parse error: {parse_e}; raw: {resp.text}")
@@ -260,114 +258,8 @@ PHUKET_AREAS_COORDS = {
 }
 
 # Базовые сообщения на английском
-BASE_MESSAGES = {
-    'welcome': "I know everything about restaurants in Phuket.",
-    'choose_language': "Please choose your language or just type a message — I understand more than 120 languages and will reply in yours!",
-    'budget_question': "What price range would you prefer for the restaurant?",
-    'budget_saved': "I've saved your choice. You can always change it. Tell me what you'd like today — I'll find a perfect option and book a table for you.",
-    'current_budget': "Current price range: {}",
-    'no_budget': "Price range not selected",
-    'error': "Sorry, an error occurred. Please try again.",
-    # Новые сообщения для локации
-    'location_question': "Choose your location:",
-    'location_near': "NEAR ME",
-    'location_area': "CHOOSE AREA",
-    'location_any': "ANYWHERE",
-    'location_send': "Please share your current location, I will find a restaurant nearby. Or enter the area as text.",
-    'location_thanks': "Thank you! Now I know your location.",
-    'area_question': "Choose area:",
-    'area_selected': "Great, let's search in the {area} area. What would you like to eat today? I'll find a great option and book a table.",
-    'location_any_confirmed': "Okay, I'll search restaurants all over the island.",
-    'location_error': "Sorry, I couldn't get your location. Please try again or choose another option.",
-    'other_area_prompt': "Please specify the area or location you're interested in.",
-    'choose_area_instruction': "Choose an area from the list or type a more precise location",
-    'area_not_found_by_coords': "Could not determine the area by coordinates. Please select an area manually.",
-    'generic_error': "An error occurred. Please try again.",
-    'another_price_not_found': "There are no restaurants in other price categories in this area. Try another area.",
-    'area_not_found': "Error: could not determine the area for restaurant search.",
-    'search_error': "Error searching for restaurants: {error}",
-    'only_restaurant_help': "I can only help with restaurant selection and booking. Tell me what you'd like to eat or which restaurant you're looking for.",
-}
-
-# --- Универсальный переводчик: сначала DeepL, потом ai_engine ---
-async def translate_message(message_key: str, language: str, **kwargs) -> str:
-    """
-    Переводит сообщение на нужный язык: сначала DeepL, если не сработал — через выбранный ai_engine (OpenAI или ЯндексGPT).
-    """
-    base = BASE_MESSAGES[message_key].format(**kwargs)
-    logger.info(f"[TRANSLATE] message_key={message_key}, language={language}, base='{base}'")
-    if language == 'en':
-        logger.info("[TRANSLATE] Язык английский, возврат без перевода.")
-        return base
-    # 1. DeepL
-    try:
-        deepl_api_key = os.getenv('DEEPL_API_KEY')
-        if deepl_api_key:
-            url = 'https://api-free.deepl.com/v2/translate'
-            params = {
-                'text': base,
-                'target_lang': language.upper()
-            }
-            headers = {
-                'Authorization': f'DeepL-Auth-Key {deepl_api_key}'
-            }
-            logger.info(f"[TRANSLATE] Deepl params: {params}, headers: {headers}")
-            resp = requests.post(url, data=params, headers=headers, timeout=20)
-            logger.info(f"[TRANSLATE] Deepl response status: {resp.status_code}, text: {resp.text}")
-            resp.raise_for_status()
-            result = resp.json()
-            logger.info(f"[TRANSLATE] Deepl result: {result}")
-            return result['translations'][0]['text']
-        else:
-            logger.warning("[TRANSLATE] DEEPL_API_KEY не найден в окружении!")
-    except Exception as e:
-        logger.error(f"DeepL error: {e}")
-    # 2. ai_engine (OpenAI или Яндекс)
-    try:
-        context = kwargs.get('context', None)
-        engine = None
-        if context and 'ai_engine' in context.user_data:
-            engine = context.user_data['ai_engine']
-        else:
-            if ping_openai():
-                engine = 'openai'
-            else:
-                engine = 'yandex'
-            if context:
-                context.user_data['ai_engine'] = engine
-        logger.info(f"[TRANSLATE] Используется AI engine: {engine}")
-        if engine == 'openai':
-            prompt = get_prompt('translate', 'openai', text=base, target_language=language)
-            messages = [{"role": "user", "content": prompt}]
-            response = client.chat.completions.create(
-                model="gpt-4",
-                messages=messages,
-                temperature=0.3,
-                max_tokens=100
-            )
-            return response.choices[0].message.content.strip()
-        elif engine == 'yandex':
-            yandex_api_key = os.getenv('YANDEX_GPT_API_KEY')
-            yandex_folder_id = os.getenv('YANDEX_FOLDER_ID')
-            prompt = get_prompt('translate', 'yandex', text=base, target_language=language)
-            url = 'https://llm.api.cloud.yandex.net/foundationModels/v1/completion'
-            headers = {
-                'Authorization': f'Api-Key {yandex_api_key}',
-                'Content-Type': 'application/json'
-            }
-            data = {
-                "modelUri": f"gpt://{yandex_folder_id}/yandexgpt/latest",
-                "completionOptions": {"stream": False, "temperature": 0.7, "maxTokens": 1000},
-                "messages": [{"role": "user", "text": prompt}]
-            }
-            resp = requests.post(url, headers=headers, json=data, timeout=20)
-            resp.raise_for_status()
-            result = resp.json()
-            return result['result']['alternatives'][0]['message']['text'].strip()
-    except Exception as e:
-        logger.error(f"Error translating message: {e}")
-    logger.info("[TRANSLATE] Возврат оригинального текста без перевода.")
-    return base
+with open('messages/base_messages.txt', 'r', encoding='utf-8') as f:
+    BASE_MESSAGES = json.load(f)
 
 # --- Новый универсальный определитель языка ---
 def detect_language(text):
@@ -553,7 +445,7 @@ async def location_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                 row.append(InlineKeyboardButton(areas[i+1][1], callback_data=f'area_{areas[i+1][0]}'))
             keyboard.append(row)
         reply_markup = InlineKeyboardMarkup(keyboard)
-        msg = await translate_message('area_question', language)
+        msg = await translate_message('choose_area_instruction', language)
         await query.message.reply_text(msg, reply_markup=reply_markup)
     elif query.data == 'location_any':
         await context.bot.send_chat_action(chat_id=query.message.chat_id, action=ChatAction.TYPING)
@@ -1219,6 +1111,27 @@ async def show_other_price_callback(update: Update, context: ContextTypes.DEFAUL
     except Exception as e:
         logger.error(f"Ошибка в show_other_price_callback: {e}")
         await update.effective_chat.send_message(f"Ошибка поиска ресторанов: {e}")
+
+async def translate_message(message_key: str, language: str, **kwargs) -> str:
+    base = BASE_MESSAGES[message_key].format(**kwargs)
+    logger.info(f"[TRANSLATE] message_key={message_key}, language={language}, base='{base}'")
+    if language == 'en':
+        logger.info("[TRANSLATE] Язык английский, возврат без перевода.")
+        return base
+    try:
+        prompt = get_prompt('translate', 'openai', text=base, target_language=language)
+        messages = [{"role": "user", "content": prompt}]
+        response = client.chat.completions.create(
+            model="gpt-4",
+            messages=messages,
+            temperature=0.3,
+            max_tokens=100
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        logger.error(f"Error translating message: {e}")
+    logger.info("[TRANSLATE] Возврат оригинального текста без перевода.")
+    return base
 
 def main():
     app = ApplicationBuilder().token(telegram_token).build()

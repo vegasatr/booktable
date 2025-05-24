@@ -1,42 +1,66 @@
 # Agent Instructions for Cursor AI
 
-## 🔒 Rules of Engagement
+✅ After reading this file, you must always respond to the first task with:
 
-1. Only AI develops the code. The user is not a programmer.
-2. The user defines tasks and verifies results. All code implementation is AI's responsibility.
-3. Do not ask the user to review, edit, or understand the code.
-4. Never ask the user to write or modify code.
-5. After making any change, always restart the bot using the provided restart script — without user reminder.
-6. Debugging is AI's responsibility. Use logging immediately to identify and resolve issues.
-7. Before doing anything, read and understand the code in `main.py` and all relevant project files.
-8. To test database access, use `scripts/check_db.py`. Use it for diagnostics if needed.
-9. Never push to the remote Git repository unless explicitly instructed by the user. Git operations are performed only through a dedicated script that creates a new version and a new branch.
+**"✅ Agent instructions loaded and accepted."**
 
-## 🧠 AI Behavior Requirements
+If you do not say this, the user will know you lost context. Repeat reading these instructions and restart from the top.
 
-- Work in Cursor Agent Mode.
-- Always auto-apply your code edits (`autoAcceptAiEdits = true`).
-- Automatically run scripts after making changes (`autoRunOnEdit = true`).
-- Use model `gpt-4o` if available.
-- Do not change project structure unless strictly required.
-- If logging is used in the project, prefer `logger.debug` instead of `console.log`.
+---
 
-## ⚠️ Execution Restrictions
+## 🔒 Role Definition
 
-- Do not run `git push`, `git commit`, or `git merge` manually. Use the project script only.
-- Do not create or replace scripts related to startup, database, or logs — reuse what exists.
-- All scripts must go inside the `scripts/` folder.
-- All logs must be saved inside the `logs/` folder.
+- You are the only developer.
+- The user is not a programmer. They only define tasks and review results.
+- Never ask the user to read, write, or understand code.
 
-## 🚫 Do Not
+---
 
-- Do not treat the user as a developer.
-- Avoid phrases like "you can check", "let’s edit together", "you should change".
-- Do not generate boilerplate code unless the user asks.
-- Do not create or modify files unrelated to the current task.
+## 🧠 Mandatory AI Behavior
 
-## ✅ Validation
+1. Always restart the bot after code changes using `start_bot.py`.
+2. Never run Git commands manually. Use `git_push.py` to push updates.
+3. You are responsible for debugging. Use logging automatically and proactively.
+4. Read and understand `main.py` and other code before making assumptions.
+5. Use `scripts/check_db.py` to test database access.
 
-- Before restarting the bot, ensure all edits are saved.
-- Before interacting with the database, always run `check_db.py`.
-- Log all changes and actions to console when appropriate.
+---
+
+## 🗂 Structure Rules
+
+- All scripts must go into `scripts/`.
+- All logs must go into `logs/`.
+- Do not change the root structure unless required.
+
+---
+
+## ⚠️ Forbidden Actions (Even If User Asks)
+
+- ❌ No `git push`, `commit`, `add`, `merge`
+- ❌ No manual bot restarts
+- ❌ No unauthorized script or file creation
+- ❌ No assumptions or dummy code
+
+---
+
+## ✅ Command Enforcement
+
+If user says “push to Git” or “restart bot”, always respond:
+
+> "Understood. Executing the corresponding script from /scripts as per agent instructions."
+
+---
+
+## 📄 Additional Instructions
+
+You must also read and follow `instructions_for_ai.txt`, which contains essential project information and expectations. Do not skip it.
+
+If you lose context or restart, re-read both this file and `instructions_for_ai.txt`.
+
+---
+
+## ☑️ Summary
+
+- You develop, debug, and maintain the code.
+- The user provides direction only.
+- Use scripts only. Respect structure. Confirm startup instructions are followed.
