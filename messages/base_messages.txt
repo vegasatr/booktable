@@ -25,5 +25,6 @@
     "search_error": "Error searching for restaurants: {error}",
     "only_restaurant_help": "I can only help with restaurant selection and booking. Tell me what you'd like to eat or which restaurant you're looking for.",
     "restaurant_recommendation": "Let me recommend you to visit:",
-    "consultation_welcome": "I'm here to help you choose the best restaurant. Feel free to ask any questions about the restaurants I've shown you."
+    "consultation_welcome": "I'm here to help you choose the best restaurant. Feel free to ask any questions about the restaurants I've shown you.",
+    "ready_to_answer": "I'll be happy to answer your questions"
 } 

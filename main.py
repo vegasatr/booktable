@@ -127,7 +127,6 @@ def save_user_to_db(user_id, username, first_name, last_name, language):
             logger.info("Cursor closed")
         if conn:
             conn.close()
-            logger.info("Database connection closed")
 
 # Загружаем промпты
 with open('prompts.json', 'r', encoding='utf-8') as f:
@@ -154,7 +153,7 @@ def ping_openai():
 async def ai_generate(task, text=None, target_language=None, preferences=None, context_log=None, context=None):
     """
     Для генерации ответов, рекомендаций, уточнений и т.д. — только OpenAI или ЯндексGPT.
-    task: restaurant_recommendation, greet, clarify, fallback_error
+    task: restaurant_recommendation, greet, clarify, fallback_error, restaurant_qa
     """
     engine = None
     if context and 'ai_engine' in context.user_data:
@@ -175,6 +174,8 @@ async def ai_generate(task, text=None, target_language=None, preferences=None, c
                 prompt = get_prompt('greet', 'openai', target_language=target_language)
             elif task == 'clarify':
                 prompt = get_prompt('clarify', 'openai', target_language=target_language)
+            elif task == 'restaurant_qa':
+                prompt = get_prompt('restaurant_qa', 'openai', text=text)
             else:
                 prompt = get_prompt('fallback_error', 'openai')
             messages = [{"role": "user", "content": prompt}]
@@ -200,6 +201,8 @@ async def ai_generate(task, text=None, target_language=None, preferences=None, c
                 prompt = get_prompt('greet', 'yandex', target_language=target_language)
             elif task == 'clarify':
                 prompt = get_prompt('clarify', 'yandex', target_language=target_language)
+            elif task == 'restaurant_qa':
+                prompt = get_prompt('restaurant_qa', 'yandex', text=text)
             else:
                 prompt = get_prompt('fallback_error', 'yandex')
             url = 'https://llm.api.cloud.yandex.net/foundationModels/v1/completion'
@@ -407,6 +410,11 @@ async def budget_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await context.bot.send_chat_action(chat_id=query.message.chat_id, action=ChatAction.TYPING)
     budget = query.data.split('_')[1]
     context.user_data['budget'] = budget
+    
+    # Сохраняем бюджет в базу
+    user_id = update.effective_user.id
+    save_user_preferences(user_id, {'budget': budget})
+    
     language = context.user_data.get('language', 'en')
     budget_saved = await translate_message('budget_saved', language)
     await query.message.delete()
@@ -419,6 +427,12 @@ async def budget_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await query.answer()
     await query.message.reply_text(budget_saved)
     context.user_data['awaiting_budget_response'] = True
+    
+    # Обновляем команды меню после выбора бюджета
+    await context.bot.set_my_commands([
+        ("restart", "Перезапустить бота"),
+        ("new_search", "Новый поиск")
+    ])
 
 async def translate_message(message_key, language, **kwargs):
     """
@@ -606,6 +620,25 @@ async def show_pretty_restaurants(update, context):
             logger.info(f"[SHOW_RESTAURANTS] Found {len(rows)} restaurants")
             
             if not rows:
+                # Проверяем, есть ли вообще рестораны в базе
+                cur.execute("SELECT COUNT(*) FROM restaurants")
+                total_count = cur.fetchone()[0]
+                logger.info(f"[SHOW_RESTAURANTS] Total restaurants in database: {total_count}")
+                
+                # Проверяем рестораны с указанным бюджетом
+                cur.execute("SELECT COUNT(*) FROM restaurants WHERE average_check::text = %s", (budget_str,))
+                budget_count = cur.fetchone()[0]
+                logger.info(f"[SHOW_RESTAURANTS] Restaurants with budget {budget_str}: {budget_count}")
+                
+                # Проверяем рестораны в указанном районе
+                cur.execute("""
+                    SELECT COUNT(*) FROM restaurants 
+                    WHERE REPLACE(REPLACE(LOWER(location), ' ', ''), ',', '') ILIKE %s 
+                    OR REPLACE(REPLACE(LOWER(location), ' ', ''), ',', '') ILIKE %s
+                """, (f"%{smart_area}%", f"%{smart_name}%"))
+                area_count = cur.fetchone()[0]
+                logger.info(f"[SHOW_RESTAURANTS] Restaurants in area {smart_area}/{smart_name}: {area_count}")
+                
                 msg = await translate_message('no_restaurants_found', language)
                 await update.effective_chat.send_message(msg)
                 cur.close()
@@ -613,6 +646,8 @@ async def show_pretty_restaurants(update, context):
                 return
 
             # Отправляем сообщение с рекомендацией
+            await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+            await asyncio.sleep(1)
             recommendation_msg = await translate_message('restaurant_recommendation', language)
             await update.effective_chat.send_message(recommendation_msg)
 
@@ -620,6 +655,9 @@ async def show_pretty_restaurants(update, context):
             for r in rows:
                 logger.info(f"[SHOW_RESTAURANTS] Processing restaurant: {r['name']}")
                 logger.info(f"[SHOW_RESTAURANTS] Raw data from DB: {dict(r)}")
+                
+                await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+                await asyncio.sleep(1)
                 
                 msg = f"• {r['name']}\n"
                 # Переводим кухню
@@ -650,6 +688,7 @@ async def show_pretty_restaurants(update, context):
                 ]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
+            logger.info("[SHOW_RESTAURANTS] Created keyboard with buttons")
 
             # Устанавливаем режим консультации
             context.user_data['consultation_mode'] = True
@@ -658,8 +697,12 @@ async def show_pretty_restaurants(update, context):
             ])
 
             # Отправляем приветственное сообщение
+            await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+            await asyncio.sleep(1)
             welcome_msg = await translate_message('consultation_welcome', language)
+            logger.info(f"[SHOW_RESTAURANTS] Sending welcome message with keyboard: {welcome_msg}")
             await update.effective_chat.send_message(welcome_msg, reply_markup=reply_markup)
+            logger.info("[SHOW_RESTAURANTS] Welcome message sent with keyboard")
 
         cur.close()
         conn.close()
@@ -748,6 +791,82 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         else:
             await context.bot.send_message(chat_id=update.effective_user.id, text=error_text)
 
+async def ask_about_restaurant_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.info("[ASK_ABOUT_RESTAURANT] Callback triggered")
+    query = update.callback_query
+    logger.info(f"[ASK_ABOUT_RESTAURANT] Query data: {query.data}")
+    
+    try:
+        await query.answer()
+        logger.info("[ASK_ABOUT_RESTAURANT] Query answered")
+        
+        await query.message.delete()
+        logger.info("[ASK_ABOUT_RESTAURANT] Message deleted")
+        
+        # Получаем информацию о ресторанах
+        restaurants = context.user_data.get('filtered_restaurants', [])
+        logger.info(f"[ASK_ABOUT_RESTAURANT] Found {len(restaurants)} restaurants in context")
+        logger.info(f"[ASK_ABOUT_RESTAURANT] Raw restaurant data: {restaurants}")
+        
+        if not restaurants:
+            logger.warning("[ASK_ABOUT_RESTAURANT] No restaurants found in context")
+            await update.effective_chat.send_message("Извините, информация о ресторанах недоступна. Пожалуйста, начните поиск заново.")
+            return
+
+        # Получаем предпочтения пользователя
+        user_wish = context.user_data.get('last_user_wish', '')
+        language = context.user_data.get('language', 'ru')
+        logger.info(f"[ASK_ABOUT_RESTAURANT] User wish: {user_wish}, language: {language}")
+
+        # Формируем контекст для ChatGPT
+        restaurant_info = []
+        for r in restaurants:
+            info = {
+                'name': r.get('name', ''),
+                'cuisine': r.get('cuisine', ''),
+                'average_check': r.get('average_check', ''),
+                'features': r.get('features', ''),
+                'atmosphere': r.get('atmosphere', ''),
+                'story': r.get('story_or_concept', '')
+            }
+            restaurant_info.append(info)
+            logger.info(f"[ASK_ABOUT_RESTAURANT] Processed restaurant info: {info}")
+
+        # Преобразуем в строку для промпта
+        restaurant_info_str = "\n".join([
+            f"Restaurant: {r['name']}\n"
+            f"Cuisine: {r['cuisine']}\n"
+            f"Average check: {r['average_check']}\n"
+            f"Features: {r['features']}\n"
+            f"Atmosphere: {r['atmosphere']}\n"
+            f"Story: {r['story']}\n"
+            for r in restaurant_info
+        ])
+        logger.info(f"[ASK_ABOUT_RESTAURANT] Formatted restaurant info: {restaurant_info_str}")
+
+        # Устанавливаем флаг, что мы в режиме консультации
+        context.user_data['consultation_mode'] = True
+        context.user_data['restaurant_info'] = restaurant_info_str
+        context.user_data['in_restaurant_qa'] = True
+        logger.info("[ASK_ABOUT_RESTAURANT] Context flags set")
+
+        # Отправляем простое приветственное сообщение
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+        await asyncio.sleep(1)
+        
+        welcome_msg = await translate_message('ready_to_answer', language)
+        logger.info(f"[ASK_ABOUT_RESTAURANT] Sending welcome message: {welcome_msg}")
+        await update.effective_chat.send_message(welcome_msg)
+        logger.info("[ASK_ABOUT_RESTAURANT] Welcome message sent")
+        
+    except Exception as e:
+        logger.error(f"[ASK_ABOUT_RESTAURANT] Error: {e}")
+        logger.exception("[ASK_ABOUT_RESTAURANT] Full traceback:")
+        try:
+            await update.effective_chat.send_message("Произошла ошибка. Пожалуйста, попробуйте еще раз.")
+        except Exception as send_e:
+            logger.error(f"[ASK_ABOUT_RESTAURANT] Failed to send error message: {send_e}")
+
 async def talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     user_id = user["id"]
@@ -788,9 +907,8 @@ async def talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         logger.info(f"User saved with client_number: {client_number}")
         
-        # Включаем эффект печатания
         await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.TYPING)
-        await asyncio.sleep(1)  # Добавляем небольшую задержку
+        await asyncio.sleep(1)
         
         welcome_message = await translate_message('welcome', detected_lang)
         await update.message.reply_text(welcome_message)
@@ -801,14 +919,11 @@ async def talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # Если это ответ после выбора бюджета
     if context.user_data.get('awaiting_budget_response'):
         context.user_data['awaiting_budget_response'] = False
-        # Включаем эффект печатания
         await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.TYPING)
-        await asyncio.sleep(1)  # Добавляем небольшую задержку
+        await asyncio.sleep(1)
         
-        # Сохраняем последнее пожелание пользователя
         context.user_data['last_user_wish'] = text
 
-        # Показываем кнопки выбора локации в одну строку
         keyboard = [[
             InlineKeyboardButton("РЯДОМ", callback_data='location_near'),
             InlineKeyboardButton("РАЙОН", callback_data='location_area'),
@@ -819,30 +934,84 @@ async def talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(location_message, reply_markup=reply_markup)
         return
 
-    # Все остальные сообщения — обычный диалог
-    try:
-        # Включаем эффект печатания
+    # Обработка диалога в режиме вопросов о ресторанах
+    if context.user_data.get('in_restaurant_qa'):
         await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.TYPING)
-        await asyncio.sleep(1)  # Добавляем небольшую задержку
+        await asyncio.sleep(1)
         
-        # Если у нас есть информация о ресторанах и мы в режиме консультации
-        if context.user_data.get('consultation_mode') and context.user_data.get('filtered_restaurants'):
-            restaurants = context.user_data['filtered_restaurants']
-            restaurant_info = "\n".join([
-                f"Restaurant: {r['name']}\n"
-                f"Cuisine: {r['cuisine']}\n"
-                f"Features: {r['features']}\n"
-                f"Atmosphere: {r['atmosphere']}\n"
-                f"Story: {r['story_or_concept']}\n"
-                for r in restaurants
-            ])
-            prompt = f"Пользователь спрашивает: '{text}'. Вот информация о ресторанах: {restaurant_info}. Ответь на вопрос пользователя, используя только информацию из базы данных. Не упоминай рестораны, которых нет в списке. Пиши на языке пользователя ({language})."
-            a, chat_log = ask(prompt, context.user_data['chat_log'], language)
-            context.user_data['chat_log'] = chat_log
-            await update.message.reply_text(a)
-        else:
-            # Обычный диалог
-            a, chat_log = ask(text, context.user_data['chat_log'], language)
+        restaurants = context.user_data.get('filtered_restaurants', [])
+        restaurant_info = context.user_data.get('restaurant_info', '')
+        
+        # Проверяем, хочет ли пользователь сменить район
+        if any(word in text.lower() for word in ['другой район', 'сменить район', 'не подходит', 'не нравится', 'не хочу']):
+            context.user_data['in_restaurant_qa'] = False
+            keyboard = [[
+                InlineKeyboardButton("РЯДОМ", callback_data='location_near'),
+                InlineKeyboardButton("РАЙОН", callback_data='location_area'),
+                InlineKeyboardButton("ВЕЗДЕ", callback_data='location_any')
+            ]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text("Хорошо, давайте подберем ресторан в другом районе!", reply_markup=reply_markup)
+            return
+
+        # Формируем промпт для AI с учетом контекста
+        prompt = f"""
+        Ты - консультант по ресторанам на Пхукете. Отвечай на вопросы клиента о ресторанах, используя только информацию из базы данных.
+
+        Вопрос клиента: '{text}'
+
+        Информация о ресторанах:
+        {restaurant_info}
+
+        Правила ответа:
+        1. Отвечай ТОЛЬКО на основе информации из базы данных
+        2. Если информации нет - честно скажи, что не знаешь
+        3. Если вопрос не о ресторанах - вежливо верни к теме выбора ресторана
+        4. Отвечай на языке клиента ({language})
+        5. Будь дружелюбным и естественным
+        6. Не используй фразы про "AI" или "искусственный интеллект"
+        7. Не упоминай слово "бот"
+        8. Не используй формальные фразы типа "как я могу помочь"
+        9. Если вопрос о конкретном ресторане - отвечай подробно
+        10. Если вопрос общий - отвечай про все рестораны из списка
+        11. Если в features или cuisine упоминается мясо - значит оно есть
+        12. Если в features или cuisine упоминается вегетарианское/веганское - значит есть такие блюда
+        13. Если в features или cuisine упоминается безглютеновое - значит есть такие блюда
+        14. Если в features упоминается терраса - значит она есть
+        15. Если в features упоминается вид на море - значит он есть
+        16. Если в features упоминается парковка - значит она есть
+        17. Если в features упоминается Wi-Fi - значит он есть
+        18. Если в features упоминается кондиционер - значит он есть
+        19. Если в features упоминается кофейня/бар - значит они есть
+        20. Если в features упоминается ферма - значит она есть
+
+        Верни только ответ на вопрос, без дополнительных пояснений.
+        """
+        
+        try:
+            # Логируем промпт
+            logger.info(f"[RESTAURANT_QA] Sending prompt to AI: {prompt}")
+            
+            # Определяем язык ответа и используем правильный task
+            response = await ai_generate('restaurant_qa', text=prompt, target_language=language)
+            
+            # Логируем ответ
+            logger.info(f"[RESTAURANT_QA] Received response from AI: {response}")
+            
+            # Отправляем ответ пользователю
+            await update.message.reply_text(response)
+        except Exception as e:
+            logger.error(f"Error in restaurant QA: {e}")
+            error_message = await translate_message('error', language)
+            await update.message.reply_text(error_message)
+        return
+
+    # Обычный диалог
+    try:
+        await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.TYPING)
+        await asyncio.sleep(1)
+        
+        a, chat_log = ask(text, context.user_data['chat_log'], language)
         context.user_data['chat_log'] = chat_log
         await update.message.reply_text(a)
     except Exception as e:
@@ -869,10 +1038,48 @@ async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # Приветственное сообщение и меню, как при /start
     await start(update, context)
 
+async def new_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Начинает новый поиск ресторана, сохраняя только бюджет"""
+    logger.info("[NEW_SEARCH] Starting new search")
+    user_id = update.effective_user.id
+    
+    # Получаем сохраненные предпочтения из базы
+    preferences = get_user_preferences(user_id)
+    
+    # Сохраняем только бюджет
+    if preferences and preferences.get('budget'):
+        context.user_data['budget'] = preferences['budget']
+    else:
+        # Если бюджет не найден, предлагаем его выбрать
+        await show_budget_buttons(update, context)
+        return
+    
+    # Показываем выбор локации
+    keyboard = [[
+        InlineKeyboardButton("РЯДОМ", callback_data='location_near'),
+        InlineKeyboardButton("РАЙОН", callback_data='location_area'),
+        InlineKeyboardButton("ВЕЗДЕ", callback_data='location_any')
+    ]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    # Эффект набора текста
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+    await asyncio.sleep(1)
+    
+    await update.message.reply_text(
+        "Подберу для Вас отличный ресторан! Поискать поблизости, в другом районе или в любом месте на Пхукете?",
+        reply_markup=reply_markup
+    )
+
 async def set_bot_commands(app):
-    await app.bot.set_my_commands([
-        ("restart", "Перезапустить бота")
-    ])
+    """Устанавливает команды бота в меню"""
+    commands = [
+        ("restart", "Перезапустить бота"),
+        ("new_search", "Новый поиск")
+    ]
+    
+    # Всегда устанавливаем команды меню
+    await app.bot.set_my_commands(commands)
     await app.bot.set_chat_menu_button(menu_button=MenuButtonCommands())
 
 async def choose_area_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1042,43 +1249,77 @@ async def book_restaurant_callback(update: Update, context: ContextTypes.DEFAULT
     # TODO: Реализовать логику бронирования
     await update.effective_chat.send_message("Функция бронирования будет доступна в следующем обновлении.")
 
-async def ask_about_restaurant_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    await query.answer()
-    await query.message.delete()
-    
-    # Получаем информацию о ресторанах
-    restaurants = context.user_data.get('filtered_restaurants', [])
-    if not restaurants:
-        await update.effective_chat.send_message("Извините, информация о ресторанах недоступна. Пожалуйста, начните поиск заново.")
-        return
+def save_user_preferences(user_id, preferences):
+    """Сохраняет предпочтения пользователя в базу данных"""
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        # Обновляем предпочтения пользователя
+        update_query = """
+            UPDATE users 
+            SET budget = %s,
+                last_search_area = %s,
+                last_search_location = %s,
+                preferences_updated_at = CURRENT_TIMESTAMP
+            WHERE telegram_user_id = %s
+        """
+        cur.execute(update_query, (
+            preferences.get('budget'),
+            preferences.get('area'),
+            preferences.get('location'),
+            user_id
+        ))
+        
+        conn.commit()
+        logger.info(f"[DB] Saved preferences for user {user_id}: {preferences}")
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        logger.error(f"[DB] Error saving preferences: {e}")
+        raise
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
 
-    # Получаем предпочтения пользователя
-    user_wish = context.user_data.get('last_user_wish', '')
-    language = context.user_data.get('language', 'ru')
-
-    # Формируем контекст для ChatGPT
-    restaurant_info = "\n".join([
-        f"Restaurant: {r['name']}\n"
-        f"Cuisine: {r['cuisine']}\n"
-        f"Average check: {r['average_check']}\n"
-        f"Features: {r['features']}\n"
-        f"Atmosphere: {r['atmosphere']}\n"
-        f"Story: {r['story_or_concept']}\n"
-        for r in restaurants
-    ])
-
-    # Устанавливаем флаг, что мы в режиме консультации
-    context.user_data['consultation_mode'] = True
-    context.user_data['restaurant_info'] = restaurant_info
-
-    # Отправляем приветственное сообщение с учетом предпочтений
-    if user_wish:
-        welcome_msg = f"Я вижу, что вы ищете ресторан с {user_wish}. Давайте я помогу вам выбрать лучший вариант из предложенных ресторанов. Задавайте любые вопросы о них."
-    else:
-        welcome_msg = await translate_message('consultation_welcome', language)
-    
-    await update.effective_chat.send_message(welcome_msg)
+def get_user_preferences(user_id):
+    """Получает предпочтения пользователя из базы данных"""
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=DictCursor)
+        
+        # Получаем предпочтения пользователя
+        select_query = """
+            SELECT budget, last_search_area, last_search_location
+            FROM users
+            WHERE telegram_user_id = %s
+        """
+        cur.execute(select_query, (user_id,))
+        result = cur.fetchone()
+        
+        if result:
+            preferences = {
+                'budget': result['budget'],
+                'area': result['last_search_area'],
+                'location': result['last_search_location']
+            }
+            logger.info(f"[DB] Retrieved preferences for user {user_id}: {preferences}")
+            return preferences
+        return None
+    except Exception as e:
+        logger.error(f"[DB] Error getting preferences: {e}")
+        return None
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
 
 def main():
     app = ApplicationBuilder().token(telegram_token).build()
@@ -1087,6 +1328,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("restart", restart))
     app.add_handler(CommandHandler("filter", check_budget))
+    app.add_handler(CommandHandler("new_search", new_search))  # Добавляем новый обработчик
     
     # Обработчики callback-запросов
     app.add_handler(CallbackQueryHandler(language_callback, pattern="^lang_"))
@@ -1095,7 +1337,6 @@ def main():
     app.add_handler(CallbackQueryHandler(area_callback, pattern="^area_"))
     app.add_handler(CallbackQueryHandler(choose_area_callback, pattern="^choose_area$"))
     app.add_handler(CallbackQueryHandler(show_other_price_callback, pattern="^show_other_price$"))
-    # Новые обработчики
     app.add_handler(CallbackQueryHandler(book_restaurant_callback, pattern="^book_restaurant$"))
     app.add_handler(CallbackQueryHandler(ask_about_restaurant_callback, pattern="^ask_about_restaurant$"))
     
