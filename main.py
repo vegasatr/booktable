@@ -556,209 +556,184 @@ async def show_pretty_restaurants(update, context):
     }
     budget_str = budget_map.get(budget, None)
 
-    # ДОП. ОТЛАДКА: выводим, что ищем
-    # await update.effective_chat.send_message(f"DEBUG: budget_str={budget_str}, location={location}")
-
     try:
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=DictCursor)
-
         found_other_price = False
         other_price_rows = []
-        
-        if location == 'any':
+
+        if isinstance(location, dict) and 'area' in location:
             if budget_str:
-                await update.effective_chat.send_message(f"DEBUG: SQL=SELECT name, average_check FROM restaurants WHERE average_check = '{budget_str}' AND active = 'true' ORDER BY name")
-                cur.execute(
-                    "SELECT name, average_check FROM restaurants WHERE average_check = %s AND active = 'true' ORDER BY name",
-                    (budget_str,)
-                )
-                rows = cur.fetchall()
-                # Проверяем, есть ли другие рестораны в других ценовых категориях
-                cur.execute(
-                    "SELECT name, average_check FROM restaurants WHERE active = 'true' AND average_check != %s ORDER BY name",
-                    (budget_str,)
-                )
-                other_price_rows = cur.fetchall()
-                found_other_price = bool(other_price_rows)
-            else:
-                cur.execute(
-                    "SELECT name, average_check FROM restaurants WHERE active = 'true' ORDER BY name"
-                )
-                rows = cur.fetchall()
-        elif isinstance(location, dict) and 'area' in location:
-            if budget_str:
-                smart_area = location['area'].lower().replace(' ', '').replace(',', '')
-                smart_name = location['name'].lower().replace(' ', '').replace(',', '')
-                # await update.effective_chat.send_message(f"DEBUG: smart_area={smart_area}, smart_name={smart_name}")
-                # await update.effective_chat.send_message(f"DEBUG: SQL=SELECT name, average_check, location FROM restaurants WHERE (REPLACE(REPLACE(LOWER(location), ' ', ''), ',', '') ILIKE %s OR REPLACE(REPLACE(LOWER(location), ' ', ''), ',', '') ILIKE %s) AND average_check::text = '{budget_str}' AND active = 'true' ORDER BY name")
-                # await update.effective_chat.send_message(f"DEBUG: params=('%{smart_area}%', '%{smart_name}%', '{budget_str}')")
-                cur.execute(
-                    """
-                    SELECT name, average_check, location FROM restaurants
-                    WHERE (REPLACE(REPLACE(LOWER(location), ' ', ''), ',', '') ILIKE %s OR REPLACE(REPLACE(LOWER(location), ' ', ''), ',', '') ILIKE %s)
-                    AND average_check::text = %s AND active ILIKE 'true'
-                    ORDER BY name
-                    """,
-                    (f"%{smart_area}%", f"%{smart_name}%", budget_str)
-                )
+                # Специальная обработка для Пхукет-Таун
+                if location['area'] == 'phuket_town':
+                    cur.execute(
+                        """
+                        SELECT name, average_check, location FROM restaurants
+                        WHERE (LOWER(location) ILIKE %s OR LOWER(location) ILIKE %s OR LOWER(location) ILIKE %s)
+                        AND average_check::text = %s AND active ILIKE 'true'
+                        ORDER BY name
+                        """,
+                        ('%phuket town%', '%phuket-town%', '%phuket_town%', budget_str)
+                    )
+                else:
+                    smart_area = location['area'].lower().replace(' ', '').replace(',', '')
+                    smart_name = location['name'].lower().replace(' ', '').replace(',', '')
+                    cur.execute(
+                        """
+                        SELECT name, average_check, location FROM restaurants
+                        WHERE (REPLACE(REPLACE(LOWER(location), ' ', ''), ',', '') ILIKE %s OR REPLACE(REPLACE(LOWER(location), ' ', ''), ',', '') ILIKE %s)
+                        AND average_check::text = %s AND active ILIKE 'true'
+                        ORDER BY name
+                        """,
+                        (f"%{smart_area}%", f"%{smart_name}%", budget_str)
+                    )
                 rows = cur.fetchall()
                 # Проверяем, есть ли другие рестораны в этом районе с другим чеком
-                cur.execute(
-                    """
-                    SELECT name, average_check, location FROM restaurants
-                    WHERE (REPLACE(REPLACE(LOWER(location), ' ', ''), ',', '') ILIKE %s OR REPLACE(REPLACE(LOWER(location), ' ', ''), ',', '') ILIKE %s)
-                    AND average_check::text != %s AND active ILIKE 'true'
-                    ORDER BY name
-                    """,
-                    (f"%{smart_area}%", f"%{smart_name}%", budget_str)
-                )
+                if location['area'] == 'phuket_town':
+                    cur.execute(
+                        """
+                        SELECT name, average_check, location FROM restaurants
+                        WHERE (LOWER(location) ILIKE %s OR LOWER(location) ILIKE %s OR LOWER(location) ILIKE %s)
+                        AND average_check::text != %s AND active ILIKE 'true'
+                        ORDER BY name
+                        """,
+                        ('%phuket town%', '%phuket-town%', '%phuket_town%', budget_str)
+                    )
+                else:
+                    cur.execute(
+                        """
+                        SELECT name, average_check, location FROM restaurants
+                        WHERE (REPLACE(REPLACE(LOWER(location), ' ', ''), ',', '') ILIKE %s OR REPLACE(REPLACE(LOWER(location), ' ', ''), ',', '') ILIKE %s)
+                        AND average_check::text != %s AND active ILIKE 'true'
+                        ORDER BY name
+                        """,
+                        (f"%{smart_area}%", f"%{smart_name}%", budget_str)
+                    )
                 other_price_rows = cur.fetchall()
                 found_other_price = bool(other_price_rows)
-            else:
-                smart_area = location['area'].lower().replace(' ', '').replace(',', '')
-                smart_name = location['name'].lower().replace(' ', '').replace(',', '')
-                cur.execute(
-                    """
-                    SELECT name, average_check, location FROM restaurants
-                    WHERE (REPLACE(REPLACE(LOWER(location), ' ', ''), ',', '') ILIKE %s OR REPLACE(REPLACE(LOWER(location), ' ', ''), ',', '') ILIKE %s)
-                    AND active ILIKE 'true'
-                    ORDER BY name
-                    """,
-                    (f"%{smart_area}%", f"%{smart_name}%")
-                )
-                rows = cur.fetchall()
-        elif isinstance(location, dict) and 'lat' in location and 'lon' in location:
-            rows = []
-        else:
-            rows = []
 
-        # Отладочный вывод результата SQL-запроса
-        # debug_sql_result = f"DEBUG SQL rows: {rows}"
-        # await update.effective_chat.send_message(debug_sql_result)
-
-        if not rows and found_other_price and other_price_rows:
-            area_name = location['name'] if isinstance(location, dict) and 'name' in location else 'выбранном районе'
-            msg = f"Увы, но в районе {area_name} нет ресторанов со средним чеком {budget_str}, которые соответствуют высоким стандартам качества BookTable.AI. Но есть рестораны в другой ценовой категории. Посмотрите их или поищем в другом районе?\n\n"
-            for r in other_price_rows:
-                msg += f"• {r['name']} — {r['average_check']}\n"
-            keyboard = [
-                [InlineKeyboardButton("ПОСМОТРИМ", callback_data="show_other_price")],
-                [InlineKeyboardButton("ДРУГОЙ РАЙОН", callback_data="choose_area")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await update.effective_chat.send_message(msg, reply_markup=reply_markup)
-            return
-        elif not rows:
-            msg = "К сожалению, в этом районе пока нет подходящих ресторанов по выбранным параметрам. Попробуйте выбрать другой район или изменить бюджет."
-            await update.effective_chat.send_message(msg)
-            return
-        else:
-            # Если найдено 1-3 ресторана — выводим расширенную информацию и AI-комментарий
-            if 1 <= len(rows) <= 3:
-                # Получаем подробную информацию о ресторанах
-                restaurant_ids = tuple([r['name'] for r in rows])
-                # Формируем SQL для получения кухни и описания
-                cur2 = conn.cursor(cursor_factory=DictCursor)
-                names = tuple([r['name'] for r in rows])
-                # Используем параметризованный запрос для избежания ошибок с апострофами
-                cur2.execute(
-                    """
-                    SELECT name, average_check, cuisine, features, atmosphere, story_or_concept
-                    FROM restaurants
-                    WHERE name IN %s
-                    """,
-                    (names,)
-                )
-                details = {r['name']: r for r in cur2.fetchall()}
-                msg = "Рестораны, которые мы рекомендуем в этом районе:\n\n"
-                for r in rows:
-                    d = details.get(r['name'], {})
-                    cuisine = d.get('cuisine') or ''
-                    features = d.get('features')
-                    if isinstance(features, list):
-                        features = ', '.join(features)
-                    elif features is None:
-                        features = ''
-                    atmosphere = d.get('atmosphere') or ''
-                    story = d.get('story_or_concept') or ''
-                    desc = features or atmosphere or story
-                    # Переводим cuisine и описание только через OpenAI, явно указывая язык
-                    if language != 'en':
-                        try:
+                if not rows and found_other_price and other_price_rows:
+                    area_name = location['name'] if isinstance(location, dict) and 'name' in location else 'выбранном районе'
+                    msg = f"Увы, но в районе {area_name} нет ресторанов со средним чеком {budget_str}, которые соответствуют высоким стандартам качества BookTable.AI. Но есть рестораны в другой ценовой категории. Посмотрите их или поищем в другом районе?\n\n"
+                    for r in other_price_rows:
+                        msg += f"• {r['name']} — {r['average_check']}\n"
+                    keyboard = [
+                        [InlineKeyboardButton("ПОСМОТРИМ", callback_data="show_other_price")],
+                        [InlineKeyboardButton("ДРУГОЙ РАЙОН", callback_data="choose_area")]
+                    ]
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+                    await update.effective_chat.send_message(msg, reply_markup=reply_markup)
+                    return
+                elif not rows:
+                    msg = "К сожалению, в этом районе пока нет подходящих ресторанов по выбранным параметрам. Попробуйте выбрать другой район или изменить бюджет."
+                    await update.effective_chat.send_message(msg)
+                    return
+                else:
+                    # Если найдено 1-3 ресторана — выводим расширенную информацию и AI-комментарий
+                    if 1 <= len(rows) <= 3:
+                        # Получаем подробную информацию о ресторанах
+                        restaurant_ids = tuple([r['name'] for r in rows])
+                        # Формируем SQL для получения кухни и описания
+                        cur2 = conn.cursor(cursor_factory=DictCursor)
+                        names = tuple([r['name'] for r in rows])
+                        # Используем параметризованный запрос для избежания ошибок с апострофами
+                        cur2.execute(
+                            """
+                            SELECT name, average_check, cuisine, features, atmosphere, story_or_concept
+                            FROM restaurants
+                            WHERE name IN %s
+                            """,
+                            (names,)
+                        )
+                        details = {r['name']: r for r in cur2.fetchall()}
+                        msg = "Рестораны, которые мы рекомендуем в этом районе:\n\n"
+                        for r in rows:
+                            d = details.get(r['name'], {})
+                            cuisine = d.get('cuisine') or ''
+                            features = d.get('features')
+                            if isinstance(features, list):
+                                features = ', '.join(features)
+                            elif features is None:
+                                features = ''
+                            atmosphere = d.get('atmosphere') or ''
+                            story = d.get('story_or_concept') or ''
+                            desc = features or atmosphere or story
+                            # Переводим cuisine и описание только через OpenAI, явно указывая язык
+                            if language != 'en':
+                                try:
+                                    if cuisine:
+                                        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+                                        cuisine = (await ask(f"Переведи на {language} (только тип кухни, без лишних слов): {cuisine}", None, language))[0]
+                                    if desc:
+                                        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+                                        desc = (await ask(f"Переведи на {language} (только краткое описание ресторана, без лишних слов): {desc}", None, language))[0]
+                                except Exception as e:
+                                    logger.error(f"Ошибка перевода описания ресторана: {e}")
+                            msg += f"• {r['name']} — {r['average_check']}\n"
                             if cuisine:
-                                await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
-                                cuisine = (await ask(f"Переведи на {language} (только тип кухни, без лишних слов): {cuisine}", None, language))[0]
+                                msg += f"{cuisine}\n"
                             if desc:
-                                await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
-                                desc = (await ask(f"Переведи на {language} (только краткое описание ресторана, без лишних слов): {desc}", None, language))[0]
+                                msg += f"{desc}\n"
+                            msg += "\n"
+                        await update.effective_chat.send_message(msg)
+                        # AI-комментарий
+                        try:
+                            await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+                            user_history = context.user_data.get('chat_log', [])
+                            user_wish = context.user_data.get('last_user_wish', '')
+                            rest_summaries = []
+                            for r in rows:
+                                d = details.get(r['name'], {})
+                                cuisine = d.get('cuisine') or ''
+                                features = d.get('features')
+                                if isinstance(features, list):
+                                    features = ', '.join(features)
+                                elif features is None:
+                                    features = ''
+                                atmosphere = d.get('atmosphere') or ''
+                                story = d.get('story_or_concept') or ''
+                                desc = features or atmosphere or story
+                                # Переводим cuisine и описание для AI только через OpenAI
+                                if language != 'en':
+                                    try:
+                                        if cuisine:
+                                            await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+                                            cuisine = (await ask(f"Переведи на {language} (только тип кухни, без лишних слов): {cuisine}", None, language))[0]
+                                        if desc:
+                                            await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+                                            desc = (await ask(f"Переведи на {language} (только краткое описание ресторана, без лишних слов): {desc}", None, language))[0]
+                                    except Exception as e:
+                                        logger.error(f"Ошибка перевода описания ресторана: {e}")
+                                rest_summaries.append(f"{r['name']} — {cuisine}. {desc}")
+                            rest_text = '\n'.join(rest_summaries)
+                            ban_meal_words = "Не используй слова 'завтрак', 'обед', 'ужин', 'бранч' и любые конкретные приёмы пищи. Не используй фразы про отдых, отпуск, путешествие, не делай предположений о статусе пользователя (турист, экспат, резидент). Используй только нейтральные формулировки: 'вашему визиту', 'посещению', 'опыту', 'впечатлениям' и т.д."
+                            wish_part = f"Учитывай пожелание пользователя: '{user_wish}'. Используй только факты из базы (кухня, особенности, блюда), не выдумывай ничего." if user_wish else "Используй только факты из базы (кухня, особенности, блюда), не выдумывай ничего."
+                            if len(rows) == 1:
+                                prompt = (
+                                    f"Пользователь выбрал район и бюджет, вот его история: {user_history}. "
+                                    f"Вот ресторан, который мы рекомендуем: {rest_text}. "
+                                    f"{wish_part} Сделай заманчивое, мотивирующее сообщение (1-2 предложения) про этот ресторан, подчеркни его преимущества, предложи забронировать или задать вопросы. Не используй стандартные приветствия, не повторяй фразы типа 'Я знаю о ресторанах...' или 'Просто расскажите...'. {ban_meal_words} Пиши на языке пользователя ({language}), не упоминай слово 'бот', не повторяй название ресторана."
+                                )
+                            else:
+                                prompt = (
+                                    f"Пользователь выбрал район и бюджет, вот его история: {user_history}. "
+                                    f"Вот список ресторанов, которые мы рекомендуем: {rest_text}. "
+                                    f"{wish_part} Помоги пользователю определиться с выбором, кратко подскажи отличия, предложи выбрать или задать вопросы. Не используй стандартные приветствия, не повторяй фразы типа 'Я знаю о ресторанах...' или 'Просто расскажите...'. {ban_meal_words} Пиши на языке пользователя ({language}), не упоминай слово 'бот', не повторяй названия ресторанов."
+                                )
+                            ai_msg, chat_log = ask(prompt, context.user_data.get('chat_log'), language)
+                            context.user_data['chat_log'] = chat_log
+                            await update.effective_chat.send_message(ai_msg)
                         except Exception as e:
-                            logger.error(f"Ошибка перевода описания ресторана: {e}")
-                    msg += f"• {r['name']} — {r['average_check']}\n"
-                    if cuisine:
-                        msg += f"{cuisine}\n"
-                    if desc:
-                        msg += f"{desc}\n"
-                    msg += "\n"
-                await update.effective_chat.send_message(msg)
-                # AI-комментарий
-                try:
-                    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
-                    user_history = context.user_data.get('chat_log', [])
-                    user_wish = context.user_data.get('last_user_wish', '')
-                    rest_summaries = []
+                            logger.error(f"Ошибка генерации AI-комментария: {e}")
+                        return
+                    # Если больше 3 ресторанов — обычный список
+                    msg = "Рестораны, которые мы рекомендуем в этом районе:\n\n"
                     for r in rows:
-                        d = details.get(r['name'], {})
-                        cuisine = d.get('cuisine') or ''
-                        features = d.get('features')
-                        if isinstance(features, list):
-                            features = ', '.join(features)
-                        elif features is None:
-                            features = ''
-                        atmosphere = d.get('atmosphere') or ''
-                        story = d.get('story_or_concept') or ''
-                        desc = features or atmosphere or story
-                        # Переводим cuisine и описание для AI только через OpenAI
-                        if language != 'en':
-                            try:
-                                if cuisine:
-                                    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
-                                    cuisine = (await ask(f"Переведи на {language} (только тип кухни, без лишних слов): {cuisine}", None, language))[0]
-                                if desc:
-                                    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
-                                    desc = (await ask(f"Переведи на {language} (только краткое описание ресторана, без лишних слов): {desc}", None, language))[0]
-                            except Exception as e:
-                                logger.error(f"Ошибка перевода описания ресторана: {e}")
-                        rest_summaries.append(f"{r['name']} — {cuisine}. {desc}")
-                    rest_text = '\n'.join(rest_summaries)
-                    ban_meal_words = "Не используй слова 'завтрак', 'обед', 'ужин', 'бранч' и любые конкретные приёмы пищи. Не используй фразы про отдых, отпуск, путешествие, не делай предположений о статусе пользователя (турист, экспат, резидент). Используй только нейтральные формулировки: 'вашему визиту', 'посещению', 'опыту', 'впечатлениям' и т.д."
-                    wish_part = f"Учитывай пожелание пользователя: '{user_wish}'. Используй только факты из базы (кухня, особенности, блюда), не выдумывай ничего." if user_wish else "Используй только факты из базы (кухня, особенности, блюда), не выдумывай ничего."
-                    if len(rows) == 1:
-                        prompt = (
-                            f"Пользователь выбрал район и бюджет, вот его история: {user_history}. "
-                            f"Вот ресторан, который мы рекомендуем: {rest_text}. "
-                            f"{wish_part} Сделай заманчивое, мотивирующее сообщение (1-2 предложения) про этот ресторан, подчеркни его преимущества, предложи забронировать или задать вопросы. Не используй стандартные приветствия, не повторяй фразы типа 'Я знаю о ресторанах...' или 'Просто расскажите...'. {ban_meal_words} Пиши на языке пользователя ({language}), не упоминай слово 'бот', не повторяй название ресторана."
-                        )
-                    else:
-                        prompt = (
-                            f"Пользователь выбрал район и бюджет, вот его история: {user_history}. "
-                            f"Вот список ресторанов, которые мы рекомендуем: {rest_text}. "
-                            f"{wish_part} Помоги пользователю определиться с выбором, кратко подскажи отличия, предложи выбрать или задать вопросы. Не используй стандартные приветствия, не повторяй фразы типа 'Я знаю о ресторанах...' или 'Просто расскажите...'. {ban_meal_words} Пиши на языке пользователя ({language}), не упоминай слово 'бот', не повторяй названия ресторанов."
-                        )
-                    ai_msg, chat_log = ask(prompt, context.user_data.get('chat_log'), language)
-                    context.user_data['chat_log'] = chat_log
-                    await update.effective_chat.send_message(ai_msg)
-                except Exception as e:
-                    logger.error(f"Ошибка генерации AI-комментария: {e}")
-                return
-            # Если больше 3 ресторанов — обычный список
-            msg = "Рестораны, которые мы рекомендуем в этом районе:\n\n"
-            for r in rows:
-                msg += f"• {r['name']} — {r['average_check']}\n"
-            await update.effective_chat.send_message(msg)
-            return
-        cur.close()
-        conn.close()
+                        msg += f"• {r['name']} — {r['average_check']}\n"
+                    await update.effective_chat.send_message(msg)
+                    return
+            cur.close()
+            conn.close()
     except Exception as e:
         logger.error(f"Error in show_pretty_restaurants: {e}")
         await update.effective_chat.send_message(f"Ошибка поиска ресторанов: {e}")
