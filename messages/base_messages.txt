@@ -27,5 +27,6 @@
     "restaurant_recommendation": "Let me recommend you to visit:",
     "consultation_welcome": "I'm here to help you choose the best restaurant. Feel free to ask any questions about the restaurants I've shown you.",
     "ready_to_answer": "I'll be happy to answer your questions",
-    "dont_know": "Извините, честно - не знаю. Может быть что-то еще смогу подсказать?"
+    "dont_know": "Извините, честно - не знаю. Может быть что-то еще смогу подсказать?",
+    "no_restaurants_found": "Sorry, I couldn't find any restaurants in this area. Please try changing the area or price range."
 } 

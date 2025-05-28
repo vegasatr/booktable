@@ -390,7 +390,7 @@ async def test_choose_area_callback():
 async def test_show_other_price_callback():
     update = DummyUpdate()
     context = DummyContext()
-    context.user_data['location'] = {'area': 'patong', 'name': 'Паттонг'}
+    context.user_data['location'] = {'area': 'patong', 'name': 'Патонг'}
     context.user_data['budget'] = '2'
     context.user_data['language'] = 'ru'
     callback_query = AsyncMock()

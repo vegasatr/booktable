@@ -237,7 +237,7 @@ async def ai_generate(task, text=None, target_language=None, preferences=None, c
 # Список районов Пхукета
 PHUKET_AREAS = {
     'chalong': 'Чалонг',
-    'patong': 'Паттонг',
+    'patong': 'Патонг',
     'kata': 'Ката',
     'karon': 'Карон',
     'phuket_town': 'Пхукет-таун',
@@ -246,6 +246,19 @@ PHUKET_AREAS = {
     'nai_harn': 'Най Харн',
     'bang_tao': 'Банг Тао',
     'other': 'Другой'
+}
+
+# Сопоставление ключей районов с их названиями в базе данных
+AREA_DB_MAPPING = {
+    'chalong': 'Chalong',
+    'patong': 'Patong',
+    'kata': 'Kata',
+    'karon': 'Karon',
+    'phuket_town': 'Phuket Town',
+    'kamala': 'Kamala',
+    'rawai': 'Rawai',
+    'nai_harn': 'Nai Harn',
+    'bang_tao': 'Bang Tao'
 }
 
 # Координаты центров районов Пхукета (примерные)
@@ -601,26 +614,37 @@ async def show_pretty_restaurants(update, context):
         cur = conn.cursor(cursor_factory=DictCursor)
 
         if isinstance(location, dict) and 'area' in location:
-            smart_area = location['area'].lower().replace(' ', '').replace(',', '')
-            smart_name = location['name'].lower().replace(' ', '').replace(',', '')
-            logger.info(f"[SHOW_RESTAURANTS] Using smart_area={smart_area}, smart_name={smart_name}")
+            area_key = location['area']
+            # Получаем правильное название района для поиска в базе данных
+            db_area_name = AREA_DB_MAPPING.get(area_key, location.get('name', ''))
+            
+            logger.info(f"[SHOW_RESTAURANTS] Area key: {area_key}, DB area name: {db_area_name}")
             
             # Сначала проверяем, есть ли рестораны в этом районе вообще
             cur.execute("""
                 SELECT DISTINCT average_check::text as budget
                 FROM restaurants 
-                WHERE (REPLACE(REPLACE(LOWER(location), ' ', ''), ',', '') ILIKE %s 
-                OR REPLACE(REPLACE(LOWER(location), ' ', ''), ',', '') ILIKE %s)
+                WHERE LOWER(location) ILIKE %s
                 AND active ILIKE 'true'
                 ORDER BY average_check::text
-            """, (f"%{smart_area}%", f"%{smart_name}%"))
+            """, (f"%{db_area_name.lower()}%",))
             
             available_budgets = [row['budget'] for row in cur.fetchall()]
             logger.info(f"[SHOW_RESTAURANTS] Available budgets in area: {available_budgets}")
 
             if not available_budgets:
                 msg = await translate_message('no_restaurants_found', language)
-                await update.effective_chat.send_message(msg)
+                
+                # Добавляем кнопки для изменения района и чека
+                keyboard = [
+                    [
+                        InlineKeyboardButton("РАЙОН", callback_data='choose_area'),
+                        InlineKeyboardButton("ЧЕК", callback_data='change_budget')
+                    ]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await update.effective_chat.send_message(msg, reply_markup=reply_markup)
+                
                 cur.close()
                 conn.close()
                 return
@@ -629,12 +653,11 @@ async def show_pretty_restaurants(update, context):
             query = """
                 SELECT r.name, r.average_check, r.location, r.cuisine, r.features
                 FROM restaurants r
-                WHERE (REPLACE(REPLACE(LOWER(r.location), ' ', ''), ',', '') ILIKE %s 
-                OR REPLACE(REPLACE(LOWER(r.location), ' ', ''), ',', '') ILIKE %s)
+                WHERE LOWER(r.location) ILIKE %s
                 AND r.average_check::text = %s AND r.active ILIKE 'true'
                 ORDER BY r.name
             """
-            params = (f"%{smart_area}%", f"%{smart_name}%", budget_str)
+            params = (f"%{db_area_name.lower()}%", budget_str)
 
             logger.info(f"[SHOW_RESTAURANTS] Executing query: {query}")
             logger.info(f"[SHOW_RESTAURANTS] With params: {params}")
@@ -665,9 +688,9 @@ async def show_pretty_restaurants(update, context):
                 
                 # Добавляем кнопку изменения района в последнюю строку
                 if keyboard:
-                    keyboard[-1].append(InlineKeyboardButton("ИЗМЕНИТЬ РАЙОН", callback_data='choose_area'))
+                    keyboard[-1].append(InlineKeyboardButton("РАЙОН", callback_data='choose_area'))
                 else:
-                    keyboard.append([InlineKeyboardButton("ИЗМЕНИТЬ РАЙОН", callback_data='choose_area')])
+                    keyboard.append([InlineKeyboardButton("РАЙОН", callback_data='choose_area')])
                 
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 await update.effective_chat.send_message("Пожалуйста, измените ценовую категорию или выберите другой район", reply_markup=reply_markup)
@@ -1366,6 +1389,16 @@ def get_user_preferences(user_id):
         if conn:
             conn.close()
 
+# Добавляем обработчик для кнопки "ЧЕК"
+async def change_budget_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик для кнопки изменения бюджета"""
+    query = update.callback_query
+    await query.answer()
+    await query.message.delete()
+    
+    # Показываем кнопки выбора бюджета
+    await show_budget_buttons(update, context)
+
 def main():
     app = ApplicationBuilder().token(telegram_token).build()
     
@@ -1381,6 +1414,7 @@ def main():
     app.add_handler(CallbackQueryHandler(location_callback, pattern="^location_"))
     app.add_handler(CallbackQueryHandler(area_callback, pattern="^area_"))
     app.add_handler(CallbackQueryHandler(choose_area_callback, pattern="^choose_area$"))
+    app.add_handler(CallbackQueryHandler(change_budget_callback, pattern="^change_budget$"))
     app.add_handler(CallbackQueryHandler(show_other_price_callback, pattern="^show_other_price$"))
     app.add_handler(CallbackQueryHandler(book_restaurant_callback, pattern="^book_restaurant$"))
     app.add_handler(CallbackQueryHandler(ask_about_restaurant_callback, pattern="^ask_about_restaurant$"))
