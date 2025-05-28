@@ -700,6 +700,9 @@ async def translate_message(message_key, language, **kwargs):
                 system_prompt = f"""Переводчик кнопок на русский. RESERVE→РЕЗЕРВ, QUESTION→ВОПРОС, AREA→РАЙОН. Короткие заглавные буквы. Только перевод."""
             else:
                 system_prompt = f"""UI button translator to {language}. Short, concise. Only translation."""
+        elif message_key == 'location_send':
+            # Специальный промпт для сообщения о запросе геолокации
+            system_prompt = f"""Translator to {language}. You are translating a bot message asking USER to share THEIR location. This is NOT a request about bot's location. The bot is asking the user to share their current location. Only translation."""
         elif language == 'ru' and 'Phuket' in base:
             system_prompt = """Переводчик на русский. "in Phuket"→"на Пхукете". Только перевод."""
         else:
@@ -773,6 +776,7 @@ async def location_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         msg = await translate_message('choose_area_instruction', language)
         logger.info(f"[LOCATION] choose_area_instruction translated: {msg}")
         await query.message.reply_text(msg, reply_markup=reply_markup)
+        context.user_data['awaiting_location_or_area'] = True  # Добавляем флаг для обработки текстового ввода района
     elif query.data == 'location_any':
         await context.bot.send_chat_action(chat_id=query.message.chat_id, action=ChatAction.TYPING)
         await asyncio.sleep(1)
@@ -1148,17 +1152,17 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await show_pretty_restaurants(update, context)
         else:
             await update.message.reply_text("Не удалось определить район по координатам. Пожалуйста, выберите район вручную.")
-        # Убираю вызов debug_show_restaurants и лишние отладочные сообщения
+        # Убираю дублирующий вызов ask() который создает ненужное сообщение после показа ресторанов
         # Инициализируем чат с ChatGPT
-        q = "Пользователь выбрал язык, бюджет и отправил свою локацию. Начни диалог." if language == 'ru' else "User selected language, budget and sent their location. Start the conversation."
-        try:
-            a, chat_log = await ask(q, context.user_data['chat_log'], language)
-            context.user_data['chat_log'] = chat_log
-            await update.message.reply_text(a)
-        except Exception as e:
-            logger.error(f"Error in ask: {e}")
-            error_message = await translate_message('error', language)
-            await update.message.reply_text(error_message)
+        # q = "Пользователь выбрал язык, бюджет и отправил свою локацию. Начни диалог." if language == 'ru' else "User selected language, budget and sent their location. Start the conversation."
+        # try:
+        #     a, chat_log = await ask(q, context.user_data['chat_log'], language)
+        #     context.user_data['chat_log'] = chat_log
+        #     await update.message.reply_text(a)
+        # except Exception as e:
+        #     logger.error(f"Error in ask: {e}")
+        #     error_message = await translate_message('error', language)
+        #     await update.message.reply_text(error_message)
     except Exception as e:
         tb = traceback.format_exc()
         logger.error(f"Ошибка при получении локации: {e}\n{tb}")
@@ -1243,6 +1247,61 @@ async def ask_about_restaurant_callback(update: Update, context: ContextTypes.DE
             await update.effective_chat.send_message("Произошла ошибка. Пожалуйста, попробуйте еще раз.")
         except Exception as send_e:
             logger.error(f"[ASK_ABOUT_RESTAURANT] Failed to send error message: {send_e}")
+
+async def detect_area_from_text(text: str, language: str) -> str:
+    """
+    Определяет район Пхукета из текстового сообщения пользователя.
+    Возвращает ключ района из PHUKET_AREAS или None, если район не определен.
+    """
+    try:
+        text_lower = text.lower().strip()
+        
+        # Прямое сопоставление с русскими названиями
+        area_mappings = {
+            'чалонг': 'chalong',
+            'патонг': 'patong', 
+            'ката': 'kata',
+            'карон': 'karon',
+            'пхукет-таун': 'phuket_town',
+            'пхукет таун': 'phuket_town',
+            'пхукеттаун': 'phuket_town',
+            'камала': 'kamala',
+            'равай': 'rawai',
+            'най харн': 'nai_harn',
+            'найхарн': 'nai_harn',
+            'най-харн': 'nai_harn',
+            'банг тао': 'bang_tao',
+            'банг-тао': 'bang_tao',
+            'бангтао': 'bang_tao',
+            # Английские названия
+            'chalong': 'chalong',
+            'patong': 'patong',
+            'kata': 'kata', 
+            'karon': 'karon',
+            'phuket town': 'phuket_town',
+            'kamala': 'kamala',
+            'rawai': 'rawai',
+            'nai harn': 'nai_harn',
+            'bang tao': 'bang_tao'
+        }
+        
+        # Проверяем прямые совпадения
+        if text_lower in area_mappings:
+            logger.info(f"[DETECT_AREA] Direct match: {text_lower} -> {area_mappings[text_lower]}")
+            return area_mappings[text_lower]
+        
+        # Проверяем частичные совпадения
+        for area_text, area_key in area_mappings.items():
+            if area_text in text_lower or text_lower in area_text:
+                logger.info(f"[DETECT_AREA] Partial match: {text_lower} contains {area_text} -> {area_key}")
+                return area_key
+        
+        logger.info(f"[DETECT_AREA] No match found for: {text_lower}")
+        return None
+        
+    except Exception as e:
+        logger.error(f"[DETECT_AREA] Error detecting area: {e}")
+        return None
 
 async def talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
@@ -1362,6 +1421,61 @@ async def talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         location_message = "Подберу для Вас отличный ресторан! Поискать поблизости, в другом районе или в любом месте на Пхукете?"
         await update.message.reply_text(location_message, reply_markup=reply_markup)
         return
+
+    # Проверяем, ожидаем ли мы ввод района текстом
+    if context.user_data.get('awaiting_location_or_area'):
+        logger.info(f"[TALK] User sent area text: {text}")
+        context.user_data['awaiting_location_or_area'] = False
+        
+        # Пытаемся определить район из текста
+        detected_area = await detect_area_from_text(text, language)
+        
+        if detected_area:
+            logger.info(f"[TALK] Detected area: {detected_area}")
+            area_name = PHUKET_AREAS[detected_area]
+            context.user_data['location'] = {'area': detected_area, 'name': area_name}
+            
+            # Показываем рестораны в найденном районе
+            await show_pretty_restaurants(update, context)
+            return
+        else:
+            logger.info(f"[TALK] Could not detect area from text: {text}")
+            # Если не удалось определить район, объясняем пользователю
+            await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.TYPING)
+            await asyncio.sleep(1)
+            
+            error_msg = "Извините, я не смог определить район из вашего сообщения. Пожалуйста, выберите район из списка или попробуйте написать более точно."
+            if language != 'ru':
+                error_msg = await translate_text(error_msg, language)
+            
+            # Показываем кнопки выбора района
+            areas = list(PHUKET_AREAS.items())
+            keyboard = []
+            for i in range(0, len(areas), 2):
+                row = []
+                row.append(InlineKeyboardButton(areas[i][1], callback_data=f'area_{areas[i][0]}'))
+                if i + 1 < len(areas):
+                    row.append(InlineKeyboardButton(areas[i+1][1], callback_data=f'area_{areas[i+1][0]}'))
+                keyboard.append(row)
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await update.message.reply_text(error_msg, reply_markup=reply_markup)
+            return
+
+    # Проверяем, не хочет ли пользователь сменить район (если уже есть бюджет и локация)
+    state = UserState(context)
+    if state.budget and state.location and not context.user_data.get('awaiting_location_or_area'):
+        # Пытаемся определить район из текста
+        detected_area = await detect_area_from_text(text, language)
+        
+        if detected_area:
+            logger.info(f"[TALK] User wants to change area to: {detected_area}")
+            area_name = PHUKET_AREAS[detected_area]
+            context.user_data['location'] = {'area': detected_area, 'name': area_name}
+            
+            # Показываем рестораны в новом районе
+            await show_pretty_restaurants(update, context)
+            return
 
     # Определяем тип вопроса: о ресторанах или отвлеченный
     is_restaurant_question = await is_about_restaurants(text)
