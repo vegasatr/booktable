@@ -1,8 +1,8 @@
 {
     "welcome": "I know everything about restaurants in Phuket.",
     "choose_language": "Please choose your language or just type a message — I understand more than 120 languages and will reply in yours!",
-    "budget_question": "What price range would you prefer for the restaurant?",
-    "budget_saved": "I've saved your choice. You can always change it. Tell me what you'd like today — I'll find a perfect option and book a table for you.",
+    "budget_question": "What budget should we look at restaurants in today?",
+    "budget_saved": "I saved your choice. You can always change it.",
     "current_budget": "Current price range: {}",
     "no_budget": "Price range not selected",
     "error": "Sorry, an error occurred. Please try again.",
@@ -28,5 +28,6 @@
     "consultation_welcome": "I'm here to help you choose the best restaurant. Feel free to ask any questions about the restaurants I've shown you.",
     "ready_to_answer": "I'll be happy to answer your questions",
     "dont_know": "Извините, честно - не знаю. Может быть что-то еще смогу подсказать?",
-    "no_restaurants_found": "Sorry, I couldn't find any restaurants in this area. Please try changing the area or price range."
+    "no_restaurants_found": "Sorry, I couldn't find any restaurants in this area. Please try changing the area or price range.",
+    "no_restaurants_in_budget": "In this price range, in this area, there's nothing I can confidently recommend. Try selecting another area or price level."
 } 

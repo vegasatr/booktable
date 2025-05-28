@@ -113,12 +113,28 @@ class BudgetManager:
         
         logger.info(f"[BUDGET_MANAGER] Starting budget change to: {new_budget}")
         
+        # Удаляем приветственное сообщение, если оно есть
+        welcome_message_id = context.user_data.get('welcome_message_id')
+        if welcome_message_id:
+            try:
+                await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=welcome_message_id)
+                logger.info(f"[BUDGET_MANAGER] Deleted welcome message {welcome_message_id}")
+                context.user_data.pop('welcome_message_id', None)
+            except Exception as e:
+                logger.error(f"[BUDGET_MANAGER] Error deleting welcome message {welcome_message_id}: {e}")
+        
         state = UserState(context)
         context._user_id = update.effective_user.id  # Сохраняем для UserState
         state.set_budget(new_budget)
         
         logger.info(f"[BUDGET_MANAGER] Budget set to: {new_budget}")
         logger.info(f"[BUDGET_MANAGER] Current state - budget: {state.budget}, location: {state.location}")
+        
+        # ОБЯЗАТЕЛЬНО показываем сообщение о сохранении выбора с эффектом печатающей машинки
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+        await asyncio.sleep(0.5)  # Короткий эффект для короткой фразы
+        budget_saved_msg = await translate_message('budget_saved', state.language)
+        await context.bot.send_message(chat_id=update.effective_chat.id, text=budget_saved_msg)
         
         # Получаем контекст возврата
         return_context = context.user_data.get('return_context')
@@ -560,9 +576,13 @@ async def language_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await context.bot.send_chat_action(chat_id=update.effective_user.id, action=ChatAction.TYPING)
         await asyncio.sleep(1)
         if query.message:
-            await query.message.reply_text(welcome_message)
+            welcome_msg = await query.message.reply_text(welcome_message)
         else:
-            await context.bot.send_message(chat_id=update.effective_user.id, text=welcome_message)
+            welcome_msg = await context.bot.send_message(chat_id=update.effective_user.id, text=welcome_message)
+        
+        # Сохраняем ID приветственного сообщения для последующего удаления
+        context.user_data['welcome_message_id'] = welcome_msg.message_id
+        
         await show_budget_buttons(update, context)
     except Exception as e:
         logger.error(f"Error in language_callback: {e}")
@@ -835,7 +855,7 @@ async def show_pretty_restaurants(update, context):
                 }
                 
                 # Объединяем два сообщения в одно
-                combined_msg = "В этом районе могу с уверенностью рекомендовать рестораны в других ценовых категориях. Или можем посмотреть другие районы.\n\nПожалуйста, измените ценовую категорию или выберите другой район"
+                combined_msg = await translate_message('no_restaurants_in_budget', language, budget=budget_str)
                 sent_message = await update.effective_chat.send_message(combined_msg, reply_markup=reply_markup)
                 
                 # Сохраняем ID сообщения для последующего удаления
@@ -909,7 +929,7 @@ async def show_pretty_restaurants(update, context):
                 }
                 
                 # Объединяем два сообщения в одно
-                combined_msg = "В этом районе могу с уверенностью рекомендовать рестораны в других ценовых категориях. Или можем посмотреть другие районы.\n\nПожалуйста, измените ценовую категорию или выберите другой район"
+                combined_msg = await translate_message("no_restaurants_in_budget", language, budget=budget_str)
                 sent_message = await update.effective_chat.send_message(combined_msg, reply_markup=reply_markup)
                 
                 # Сохраняем ID сообщения для последующего удаления
