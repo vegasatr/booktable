@@ -21,6 +21,160 @@ load_dotenv()
 with open('version.txt', 'r') as f:
     VERSION = f.read().strip()
 
+# === ЦЕНТРАЛИЗОВАННАЯ СИСТЕМА УПРАВЛЕНИЯ СОСТОЯНИЕМ ===
+
+class UserState:
+    """Централизованное управление состоянием пользователя"""
+    
+    def __init__(self, context):
+        self.context = context
+        self.user_data = context.user_data
+    
+    @property
+    def language(self):
+        return self.user_data.get('language', 'ru')
+    
+    @property
+    def budget(self):
+        return self.user_data.get('budget')
+    
+    @property
+    def location(self):
+        return self.user_data.get('location')
+    
+    @property
+    def current_screen(self):
+        """Текущий экран/состояние пользователя"""
+        return self.user_data.get('current_screen', 'start')
+    
+    def set_budget(self, budget):
+        """Устанавливает бюджет и сохраняет в базу"""
+        self.user_data['budget'] = budget
+        # Сохраняем в базу данных
+        user_id = self.context._user_id if hasattr(self.context, '_user_id') else None
+        if user_id:
+            save_user_preferences(user_id, {'budget': budget})
+    
+    def set_location(self, location):
+        """Устанавливает локацию"""
+        self.user_data['location'] = location
+    
+    def set_screen(self, screen_name):
+        """Устанавливает текущий экран"""
+        self.user_data['current_screen'] = screen_name
+    
+    def is_ready_for_restaurants(self):
+        """Проверяет, готов ли пользователь для показа ресторанов"""
+        return bool(self.budget and self.location)
+    
+    def get_context_for_return(self):
+        """Возвращает контекст для возврата на предыдущий экран"""
+        return {
+            'screen': self.current_screen,
+            'budget': self.budget,
+            'location': self.location,
+            'language': self.language
+        }
+
+class BudgetManager:
+    """Централизованное управление бюджетом"""
+    
+    @staticmethod
+    async def show_budget_selection(update, context, return_context=None):
+        """Показывает выбор бюджета с возможностью возврата"""
+        keyboard = [
+            [
+                InlineKeyboardButton("$", callback_data="budget_1"),
+                InlineKeyboardButton("$$", callback_data="budget_2"),
+                InlineKeyboardButton("$$$", callback_data="budget_3"),
+                InlineKeyboardButton("$$$$", callback_data="budget_4")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        # Сохраняем контекст возврата
+        if return_context:
+            context.user_data['return_context'] = return_context
+        
+        state = UserState(context)
+        message = await translate_message('budget_question', state.language)
+        
+        chat_id = update.effective_chat.id
+        await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+        await asyncio.sleep(1)
+        await context.bot.send_message(chat_id=chat_id, text=message, reply_markup=reply_markup)
+    
+    @staticmethod
+    async def handle_budget_change(update, context, new_budget):
+        """Обрабатывает смену бюджета и возвращает пользователя в правильное место"""
+        query = update.callback_query
+        await query.answer()
+        await query.message.delete()
+        
+        state = UserState(context)
+        context._user_id = update.effective_user.id  # Сохраняем для UserState
+        state.set_budget(new_budget)
+        
+        # Получаем контекст возврата
+        return_context = context.user_data.get('return_context')
+        
+        if return_context and return_context.get('screen') == 'restaurant_list':
+            # Возвращаемся к списку ресторанов с новым бюджетом
+            await RestaurantDisplay.show_restaurants(update, context)
+        elif state.is_ready_for_restaurants():
+            # Если есть и бюджет и локация - показываем рестораны
+            await RestaurantDisplay.show_restaurants(update, context)
+        else:
+            # Иначе переходим к выбору локации
+            await LocationManager.show_location_selection(update, context)
+
+class RestaurantDisplay:
+    """Централизованное отображение ресторанов"""
+    
+    @staticmethod
+    async def show_restaurants(update, context):
+        """Показывает рестораны на основе текущего состояния"""
+        state = UserState(context)
+        state.set_screen('restaurant_list')
+        
+        # Очищаем предыдущие сообщения
+        await RestaurantDisplay._clear_previous_messages(update, context)
+        
+        # Вызываем существующую функцию
+        await show_pretty_restaurants(update, context)
+    
+    @staticmethod
+    async def _clear_previous_messages(update, context):
+        """Удаляет предыдущие сообщения"""
+        previous_message_ids = context.user_data.get('budget_change_message_ids', [])
+        for msg_id in previous_message_ids:
+            try:
+                await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=msg_id)
+            except Exception as e:
+                logger.error(f"Error deleting message {msg_id}: {e}")
+        context.user_data['budget_change_message_ids'] = []
+
+class LocationManager:
+    """Управление выбором локации"""
+    
+    @staticmethod
+    async def show_location_selection(update, context):
+        """Показывает выбор локации"""
+        keyboard = [[
+            InlineKeyboardButton("РЯДОМ", callback_data='location_near'),
+            InlineKeyboardButton("РАЙОН", callback_data='location_area'),
+            InlineKeyboardButton("ВЕЗДЕ", callback_data='location_any')
+        ]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        state = UserState(context)
+        message = "Подберу для Вас отличный ресторан! Поискать поблизости, в другом районе или в любом месте на Пхукете?"
+        
+        chat_id = update.effective_chat.id
+        await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+        await asyncio.sleep(1)
+        await context.bot.send_message(chat_id=chat_id, text=message, reply_markup=reply_markup)
+
 # Enable logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -359,7 +513,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
     context.user_data['awaiting_language'] = True
-    context.user_data['chat_log'] = start_convo.copy()
+    context.user_data['chat_log'] = []  # Исправлено: убрал неопределенную переменную start_convo
     context.user_data['sessionid'] = str(uuid.uuid4())
     logger.info("New session with %s", username)
 
@@ -399,48 +553,13 @@ async def language_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             logger.error(f"Failed to send error message: {send_e}")
 
 async def show_budget_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    keyboard = [
-        [
-            InlineKeyboardButton("$", callback_data="budget_1"),
-            InlineKeyboardButton("$$", callback_data="budget_2"),
-            InlineKeyboardButton("$$$", callback_data="budget_3"),
-            InlineKeyboardButton("$$$$", callback_data="budget_4")
-        ]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    lang = context.user_data.get('language', 'en')
-    message = await translate_message('budget_question', lang)
-    # Эффект набора текста перед кнопками бюджета
-    chat_id = update.message.chat_id if hasattr(update, 'message') and update.message else update.effective_user.id
-    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
-    await asyncio.sleep(1)
-    if hasattr(update, 'message') and update.message:
-        await update.message.reply_text(message, reply_markup=reply_markup)
-    else:
-        await context.bot.send_message(chat_id=update.effective_user.id, text=message, reply_markup=reply_markup)
+    """Показывает кнопки выбора бюджета - теперь использует BudgetManager"""
+    await BudgetManager.show_budget_selection(update, context)
 
 async def budget_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    await context.bot.send_chat_action(chat_id=query.message.chat_id, action=ChatAction.TYPING)
-    budget = query.data.split('_')[1]
-    context.user_data['budget'] = budget
-    
-    # Сохраняем бюджет в базу
-    user_id = update.effective_user.id
-    save_user_preferences(user_id, {'budget': budget})
-    
-    language = context.user_data.get('language', 'en')
-    budget_saved = await translate_message('budget_saved', language)
-    await query.message.delete()
-    try:
-        chat_id = query.message.chat_id
-        message_id = query.message.message_id
-        await context.bot.delete_message(chat_id=chat_id, message_id=message_id-1)
-    except Exception as e:
-        logger.error(f"Error deleting previous message: {e}")
-    await query.answer()
-    await query.message.reply_text(budget_saved)
-    context.user_data['awaiting_budget_response'] = True
+    """Обработчик выбора бюджета - теперь использует централизованную архитектуру"""
+    budget = update.callback_query.data.split('_')[1]
+    await BudgetManager.handle_budget_change(update, context, budget)
     
     # Обновляем команды меню после выбора бюджета
     await context.bot.set_my_commands([
@@ -599,6 +718,17 @@ async def show_pretty_restaurants(update, context):
 
     logger.info(f"[SHOW_RESTAURANTS] Starting with location={location}, budget={budget}, language={language}")
 
+    # Удаляем предыдущие сообщения с предложением изменить бюджет, если они есть
+    previous_message_ids = context.user_data.get('budget_change_message_ids', [])
+    for msg_id in previous_message_ids:
+        try:
+            await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=msg_id)
+            logger.info(f"[SHOW_RESTAURANTS] Deleted previous message {msg_id}")
+        except Exception as e:
+            logger.error(f"[SHOW_RESTAURANTS] Error deleting message {msg_id}: {e}")
+    # Очищаем список ID сообщений
+    context.user_data['budget_change_message_ids'] = []
+
     # Для строкового фильтра по бюджету
     budget_map = {
         '1': '$',
@@ -633,17 +763,47 @@ async def show_pretty_restaurants(update, context):
             logger.info(f"[SHOW_RESTAURANTS] Available budgets in area: {available_budgets}")
 
             if not available_budgets:
-                msg = await translate_message('no_restaurants_found', language)
+                # Если нет ресторанов с выбранным бюджетом, показываем сообщение и кнопки с доступными бюджетами
+                await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+                await asyncio.sleep(1)
                 
-                # Добавляем кнопки для изменения района и чека
-                keyboard = [
-                    [
-                        InlineKeyboardButton("РАЙОН", callback_data='choose_area'),
-                        InlineKeyboardButton("ЧЕК", callback_data='change_budget')
-                    ]
-                ]
+                # Создаем кнопки для доступных бюджетов
+                keyboard = []
+                row = []
+                for budget in available_budgets:
+                    budget_label = budget_map.get(budget, budget)
+                    row.append(InlineKeyboardButton(budget_label, callback_data=f'budget_{budget}'))
+                    if len(row) == 3:  # Максимум 3 кнопки бюджета в строке
+                        keyboard.append(row)
+                        row = []
+                if row:  # Добавляем оставшиеся кнопки бюджета
+                    keyboard.append(row)
+                
+                # Добавляем кнопку изменения района в последнюю строку
+                if keyboard:
+                    keyboard[-1].append(InlineKeyboardButton("РАЙОН", callback_data='choose_area'))
+                else:
+                    keyboard.append([InlineKeyboardButton("РАЙОН", callback_data='choose_area')])
+                
                 reply_markup = InlineKeyboardMarkup(keyboard)
-                await update.effective_chat.send_message(msg, reply_markup=reply_markup)
+                
+                # Сохраняем контекст возврата для кнопок бюджета
+                state = UserState(context)
+                context.user_data['return_context'] = {
+                    'screen': 'restaurant_list',
+                    'budget': state.budget,
+                    'location': state.location,
+                    'language': state.language
+                }
+                
+                # Объединяем два сообщения в одно
+                combined_msg = "В этом районе могу с уверенностью рекомендовать рестораны в других ценовых категориях. Или можем посмотреть другие районы.\n\nПожалуйста, измените ценовую категорию или выберите другой район"
+                sent_message = await update.effective_chat.send_message(combined_msg, reply_markup=reply_markup)
+                
+                # Сохраняем ID сообщения для последующего удаления
+                if 'budget_change_message_ids' not in context.user_data:
+                    context.user_data['budget_change_message_ids'] = []
+                context.user_data['budget_change_message_ids'].append(sent_message.message_id)
                 
                 cur.close()
                 conn.close()
@@ -671,9 +831,6 @@ async def show_pretty_restaurants(update, context):
                 await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
                 await asyncio.sleep(1)
                 
-                msg = "В этом районе могу с уверенностью рекомендовать рестораны в других ценовых категориях. Или можем посмотреть другие районы."
-                await update.effective_chat.send_message(msg)
-
                 # Создаем кнопки для доступных бюджетов
                 keyboard = []
                 row = []
@@ -693,7 +850,25 @@ async def show_pretty_restaurants(update, context):
                     keyboard.append([InlineKeyboardButton("РАЙОН", callback_data='choose_area')])
                 
                 reply_markup = InlineKeyboardMarkup(keyboard)
-                await update.effective_chat.send_message("Пожалуйста, измените ценовую категорию или выберите другой район", reply_markup=reply_markup)
+                
+                # Сохраняем контекст возврата для кнопок бюджета
+                state = UserState(context)
+                context.user_data['return_context'] = {
+                    'screen': 'restaurant_list',
+                    'budget': state.budget,
+                    'location': state.location,
+                    'language': state.language
+                }
+                
+                # Объединяем два сообщения в одно
+                combined_msg = "В этом районе могу с уверенностью рекомендовать рестораны в других ценовых категориях. Или можем посмотреть другие районы.\n\nПожалуйста, измените ценовую категорию или выберите другой район"
+                sent_message = await update.effective_chat.send_message(combined_msg, reply_markup=reply_markup)
+                
+                # Сохраняем ID сообщения для последующего удаления
+                if 'budget_change_message_ids' not in context.user_data:
+                    context.user_data['budget_change_message_ids'] = []
+                context.user_data['budget_change_message_ids'].append(sent_message.message_id)
+                
                 cur.close()
                 conn.close()
                 return
@@ -925,6 +1100,15 @@ async def talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = user["id"]
     username = user["username"]
     text = update.message.text.strip()
+    
+    # Проверяем состояние пользователя
+    state = UserState(context)
+    
+    # Если пользователь еще не выбрал бюджет, игнорируем сообщение
+    if not state.budget:
+        logger.info(f"[TALK] User {username} sent message without budget selected, ignoring")
+        return
+    
     detected_lang = await detect_language(text)
     
     # Получаем текущий язык из базы данных
@@ -1391,13 +1575,22 @@ def get_user_preferences(user_id):
 
 # Добавляем обработчик для кнопки "ЧЕК"
 async def change_budget_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обработчик для кнопки изменения бюджета"""
+    """Обработчик для кнопки изменения бюджета - теперь использует BudgetManager"""
     query = update.callback_query
     await query.answer()
     await query.message.delete()
     
-    # Показываем кнопки выбора бюджета
-    await show_budget_buttons(update, context)
+    # Сохраняем контекст возврата
+    state = UserState(context)
+    return_context = {
+        'screen': 'restaurant_list',
+        'budget': state.budget,
+        'location': state.location,
+        'language': state.language
+    }
+    
+    # Показываем кнопки выбора бюджета с контекстом возврата
+    await BudgetManager.show_budget_selection(update, context, return_context)
 
 def main():
     app = ApplicationBuilder().token(telegram_token).build()
