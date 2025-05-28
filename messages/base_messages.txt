@@ -29,5 +29,8 @@
     "ready_to_answer": "I'll be happy to answer your questions",
     "dont_know": "Извините, честно - не знаю. Может быть что-то еще смогу подсказать?",
     "no_restaurants_found": "Sorry, I couldn't find any restaurants in this area. Please try changing the area or price range.",
-    "no_restaurants_in_budget": "In this price range, in this area, there's nothing I can confidently recommend. Try selecting another area or price level."
+    "no_restaurants_in_budget": "In this price range, in this area, there's nothing I can confidently recommend. Try selecting another area or price level.",
+    "button_reserve": "RESERVE",
+    "button_question": "QUESTION",
+    "button_area": "AREA"
 } 

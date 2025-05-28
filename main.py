@@ -13,6 +13,7 @@ import asyncio
 from math import radians, sin, cos, sqrt, atan2
 import traceback
 import requests
+from context_processor import get_relevant_restaurant_data
 
 # Load environment variables
 load_dotenv()
@@ -345,86 +346,47 @@ def ping_openai():
 # --- Универсальный слой генерации/диалогов с выбором движка ---
 async def ai_generate(task, text=None, target_language=None, preferences=None, context_log=None, context=None):
     """
-    Для генерации ответов, рекомендаций, уточнений и т.д. — только OpenAI или ЯндексGPT.
+    Для генерации ответов, рекомендаций, уточнений и т.д. — только OpenAI.
     task: restaurant_recommendation, greet, clarify, fallback_error, restaurant_qa
     """
-    engine = None
-    if context and 'ai_engine' in context.user_data:
-        engine = context.user_data['ai_engine']
-    else:
-        # Определяем движок при первом обращении
-        if ping_openai():
-            engine = 'openai'
+    try:
+        # Специальная обработка для fallback_error - не отправляем в OpenAI
+        if task == 'fallback_error':
+            if target_language == 'ru':
+                return "Извините, произошла ошибка. Попробуйте ещё раз."
+            else:
+                return "Sorry, an error occurred. Please try again."
+        
+        if task == 'restaurant_recommendation':
+            prompt = get_prompt('restaurant_recommendation', 'openai', preferences=preferences, target_language=target_language)
+        elif task == 'greet':
+            prompt = get_prompt('greet', 'openai', target_language=target_language)
+        elif task == 'clarify':
+            prompt = get_prompt('clarify', 'openai', target_language=target_language)
+        elif task == 'restaurant_qa':
+            prompt = get_prompt('restaurant_qa', 'openai', text=text)
         else:
-            engine = 'yandex'
-        if context:
-            context.user_data['ai_engine'] = engine
-    if engine == 'openai':
-        try:
-            if task == 'restaurant_recommendation':
-                prompt = get_prompt('restaurant_recommendation', 'openai', preferences=preferences, target_language=target_language)
-            elif task == 'greet':
-                prompt = get_prompt('greet', 'openai', target_language=target_language)
-            elif task == 'clarify':
-                prompt = get_prompt('clarify', 'openai', target_language=target_language)
-            elif task == 'restaurant_qa':
-                prompt = get_prompt('restaurant_qa', 'openai', text=text)
+            # Для неизвестных задач возвращаем ошибку без обращения к OpenAI
+            if target_language == 'ru':
+                return "Извините, произошла ошибка. Попробуйте ещё раз."
             else:
-                prompt = get_prompt('fallback_error', 'openai')
-            messages = [{"role": "user", "content": prompt}]
-            logger.info(f"[AI] OpenAI prompt: {prompt}")
-            response = client.chat.completions.create(
-                model=openai_model,
-                messages=messages,
-                temperature=0.7,
-                max_tokens=1000
-            )
-            return response.choices[0].message.content.strip()
-        except Exception as e:
-            logger.error(f"OpenAI error: {e}")
-            if context:
-                context.user_data['ai_engine'] = 'yandex'
-            engine = 'yandex'
-    if engine == 'yandex':
-        try:
-            logger.info("[AI] YandexGPT fallback for generation...")
-            if task == 'restaurant_recommendation':
-                prompt = get_prompt('restaurant_recommendation', 'yandex', preferences=preferences, target_language=target_language)
-            elif task == 'greet':
-                prompt = get_prompt('greet', 'yandex', target_language=target_language)
-            elif task == 'clarify':
-                prompt = get_prompt('clarify', 'yandex', target_language=target_language)
-            elif task == 'restaurant_qa':
-                prompt = get_prompt('restaurant_qa', 'yandex', text=text)
-            else:
-                prompt = get_prompt('fallback_error', 'yandex')
-            url = 'https://llm.api.cloud.yandex.net/foundationModels/v1/completion'
-            headers = {
-                'Authorization': f'Api-Key {os.getenv("YANDEX_GPT_API_KEY")}',
-                'Content-Type': 'application/json'
-            }
-            data = {
-                "modelUri": f"gpt://{os.getenv('YANDEX_FOLDER_ID')}/yandexgpt/latest",
-                "completionOptions": {"stream": False, "temperature": 0.7, "maxTokens": 1000},
-                "messages": [{"role": "user", "text": prompt}]
-            }
-            resp = requests.post(url, headers=headers, json=data, timeout=20)
-            resp.raise_for_status()
-            logger.info(f"[AI] YandexGPT raw response: {resp.text}")
-            try:
-                result = resp.json()
-                text = result['result']['alternatives'][0]['message']['text'].strip()
-                logger.debug(f"[TRANSLATE] DeepL response JSON: {result}")
-                logger.debug(f"[TRANSLATE] Translated text: {result['translations'][0]['text']}")
-                return text
-            except Exception as parse_e:
-                logger.error(f"YandexGPT response parse error: {parse_e}; raw: {resp.text}")
-                return get_prompt('fallback_error', 'yandex')
-        except Exception as e:
-            logger.error(f"YandexGPT error: {e}")
-            return get_prompt('fallback_error', 'yandex')
-    logger.error(f"All AI engines failed for task {task}")
-    return get_prompt('fallback_error', 'yandex')
+                return "Sorry, an error occurred. Please try again."
+        
+        messages = [{"role": "user", "content": prompt}]
+        logger.info(f"[AI] OpenAI prompt: {prompt}")
+        response = client.chat.completions.create(
+            model=openai_model,
+            messages=messages,
+            temperature=0.7,
+            max_tokens=1000
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        logger.error(f"OpenAI error: {e}")
+        if target_language == 'ru':
+            return "Извините, произошла ошибка. Попробуйте ещё раз."
+        else:
+            return "Sorry, an error occurred. Please try again."
 
 # Список районов Пхукета
 PHUKET_AREAS = {
@@ -477,6 +439,18 @@ async def detect_language(text):
     Возвращает код языка в формате ISO 639-1.
     """
     try:
+        # Проверяем, есть ли промпт для detect_language
+        if 'detect_language' not in PROMPTS or 'openai' not in PROMPTS['detect_language']:
+            # Если промпта нет, используем простую эвристику
+            if any(char in 'абвгдеёжзийклмнопрстуфхцчшщъыьэюя' for char in text.lower()):
+                return 'ru'
+            elif any(char in 'àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþÿ' for char in text.lower()):
+                return 'fr'
+            elif any(char in 'äöüß' for char in text.lower()):
+                return 'de'
+            else:
+                return 'en'
+        
         lang = await ai_generate('detect_language', text=text)
         lang = lang.strip().lower()
         # Маппинг для схожих языков
@@ -509,7 +483,81 @@ async def ask(text, chat_log=None, language='en'):
         return answer, chat_log or []
     except Exception as e:
         logger.error(f"Error in ask: {e}")
-        return await ai_generate('fallback_error'), chat_log or []
+        return await ai_generate('fallback_error', target_language=language), chat_log or []
+
+# --- Специализированные функции для диалогов ---
+async def restaurant_chat(question, restaurant_info, language, context=None):
+    """
+    Чат о ресторанах с AI-powered контекстным процессором.
+    Использует ChatGPT для определения релевантных полей БД.
+    """
+    # Короткий системный промпт
+    system_prompt = f"Ты консультант по ресторанам Пхукета. Отвечай на языке {language}. Используй данные о ресторане для ответов. Будь дружелюбным и конкретным. Не упоминай AI/базу данных. Отвечай кратко на заданный вопрос."
+
+    # Получаем данные ресторанов из контекста
+    restaurants = []
+    if context and hasattr(context, 'user_data') and 'filtered_restaurants' in context.user_data:
+        restaurants = context.user_data['filtered_restaurants']
+        logger.info(f"[RESTAURANT_CHAT] Found {len(restaurants)} restaurants in context")
+    
+    # Используем AI-powered контекстный процессор для получения только релевантных данных
+    if restaurants:
+        optimized_restaurant_info = await get_relevant_restaurant_data(question, restaurants, language)
+        logger.info(f"[RESTAURANT_CHAT] AI-optimized data length: {len(optimized_restaurant_info)} chars vs original: {len(restaurant_info)} chars")
+    else:
+        # Fallback к оригинальным данным если нет отфильтрованных ресторанов
+        optimized_restaurant_info = restaurant_info
+
+    # Пользовательский запрос - только вопрос и AI-оптимизированные данные о ресторанах
+    user_content = f"""Информация о ресторанах:
+{optimized_restaurant_info}
+
+Вопрос: {question}"""
+
+    try:
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content}
+        ]
+        logger.info(f"[RESTAURANT_CHAT] User content length: {len(user_content)} characters")
+        response = client.chat.completions.create(
+            model=openai_model,
+            messages=messages,
+            temperature=0.7,
+            max_tokens=1000
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        logger.error(f"Error in restaurant_chat: {e}")
+        return await translate_message('error', language)
+
+async def general_chat(question, language):
+    """
+    Общий диалог для отвлеченных тем с вежливым возвратом к ресторанам.
+    Оптимизированный системный промпт для человечного, ироничного общения.
+    """
+    # Короткий системный промпт для отвлеченных тем
+    system_prompt = f"""Ты дружелюбный консультант по ресторанам Пхукета. Отвечай на языке {language}. 
+На отвлеченные темы отвечай с юмором и иронией, но вежливо. Аккуратно намекай на рестораны, не навязывая. 
+Будь человечным и остроумным. Не упоминай AI.
+ВАЖНО: НЕ рекомендуй конкретные рестораны по названиям. Отвечай максимум 2-3 короткими предложениями."""
+
+    try:
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": question}
+        ]
+        logger.info(f"[GENERAL_CHAT] Off-topic question: {question}")
+        response = client.chat.completions.create(
+            model=openai_model,
+            messages=messages,
+            temperature=0.9,  # Больше креативности для юмора и иронии
+            max_tokens=150   # Еще короче - максимум 150 токенов
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        logger.error(f"Error in general_chat: {e}")
+        return await translate_message('error', language)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
@@ -625,6 +673,7 @@ async def translate_message(message_key, language, **kwargs):
     """
     Переводит базовое сообщение на указанный язык.
     Если язык английский или перевод не удался, возвращает оригинальный текст.
+    Использует системный промпт для экономии токенов.
     """
     logger.info(f"[TRANSLATE] message_key={message_key}, language={language}")
     base = BASE_MESSAGES.get(message_key, '')
@@ -642,10 +691,24 @@ async def translate_message(message_key, language, **kwargs):
     if language == 'en':
         logger.info("[TRANSLATE] Язык английский, возврат без перевода.")
         return base
+    
     try:
-        # Более специфичный запрос на перевод, который гарантирует точный перевод базового сообщения
-        prompt = f"Translate this exact text to {language}. Return ONLY the translation, no explanations or additional text: {base}"
-        messages = [{"role": "user", "content": prompt}]
+        # Системный промпт для переводов
+        if message_key.startswith('button_'):
+            if language == 'ru':
+                # Специальные инструкции для русских кнопок
+                system_prompt = f"""Переводчик кнопок на русский. RESERVE→РЕЗЕРВ, QUESTION→ВОПРОС, AREA→РАЙОН. Короткие заглавные буквы. Только перевод."""
+            else:
+                system_prompt = f"""UI button translator to {language}. Short, concise. Only translation."""
+        elif language == 'ru' and 'Phuket' in base:
+            system_prompt = """Переводчик на русский. "in Phuket"→"на Пхукете". Только перевод."""
+        else:
+            system_prompt = f"""Translator to {language}. Only translation."""
+        
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": base}
+        ]
         response = client.chat.completions.create(
             model=openai_model,
             messages=messages,
@@ -718,7 +781,7 @@ async def location_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await query.message.reply_text(msg)
         q = "Пользователь выбрал язык, бюджет и любое место на острове. Начни диалог." if language == 'ru' else "User selected language, budget and any location on the island. Start the conversation."
         try:
-            a, chat_log = ask(q, context.user_data['chat_log'], language)
+            a, chat_log = await ask(q, context.user_data['chat_log'], language)
             context.user_data['chat_log'] = chat_log
             await query.message.reply_text(a)
         except Exception as e:
@@ -745,11 +808,18 @@ async def area_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 async def translate_text(text: str, target_language: str) -> str:
     """
     Простая функция для перевода текста через AI.
-    Использует OpenAI для перевода, возвращает оригинальный текст в случае ошибки.
+    Использует системный промпт для экономии токенов.
     """
     try:
-        prompt = f"Translate this text to {target_language}. Return ONLY the translation, no explanations: {text}"
-        messages = [{"role": "user", "content": prompt}]
+        system_prompt = f"""You are a translator to {target_language}.
+Rules:
+- Translate exactly as provided
+- Return ONLY the translation, no explanations"""
+        
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": text}
+        ]
         response = client.chat.completions.create(
             model=openai_model,
             messages=messages,
@@ -869,7 +939,7 @@ async def show_pretty_restaurants(update, context):
 
             # Теперь ищем рестораны с выбранным бюджетом
             query = """
-                SELECT r.name, r.average_check, r.location, r.cuisine, r.features
+                SELECT r.*
                 FROM restaurants r
                 WHERE LOWER(r.location) ILIKE %s
                 AND r.average_check::text = %s AND r.active ILIKE 'true'
@@ -956,11 +1026,14 @@ async def show_pretty_restaurants(update, context):
                 await asyncio.sleep(1)
                 
                 msg = f"• {r['name']}\n"
-                # Переводим кухню
+                # Переводим кухню с правильным контекстом и объединяем с ценой
+                cuisine_and_price = ""
                 if r['cuisine']:
-                    translated_cuisine = await translate_text(r['cuisine'], language)
-                    msg += f"{translated_cuisine}\n"
-                msg += f"{r['average_check']}\n"
+                    translated_cuisine = await translate_cuisine(r['cuisine'], language)
+                    cuisine_and_price = f"{translated_cuisine} - {r['average_check']}"
+                else:
+                    cuisine_and_price = r['average_check']
+                msg += f"{cuisine_and_price}\n"
                 # Переводим особенности
                 if r['features']:
                     features_text = r['features']
@@ -976,11 +1049,15 @@ async def show_pretty_restaurants(update, context):
             logger.info(f"[SHOW_RESTAURANTS] Saved {len(rows)} restaurants to context")
 
             # Создаем кнопки действий
+            button_reserve = await translate_message('button_reserve', language)
+            button_question = await translate_message('button_question', language)
+            button_area = await translate_message('button_area', language)
+            
             keyboard = [
                 [
-                    InlineKeyboardButton("БРОНИРУЮ", callback_data="book_restaurant"),
-                    InlineKeyboardButton("ЕСТЬ ВОПРОС", callback_data="ask_about_restaurant"),
-                    InlineKeyboardButton("ДРУГОЙ РАЙОН", callback_data="choose_area")
+                    InlineKeyboardButton(button_reserve, callback_data="book_restaurant"),
+                    InlineKeyboardButton(button_question, callback_data="ask_about_restaurant"),
+                    InlineKeyboardButton(button_area, callback_data="choose_area")
                 ]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -1071,7 +1148,7 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         # Инициализируем чат с ChatGPT
         q = "Пользователь выбрал язык, бюджет и отправил свою локацию. Начни диалог." if language == 'ru' else "User selected language, budget and sent their location. Start the conversation."
         try:
-            a, chat_log = ask(q, context.user_data['chat_log'], language)
+            a, chat_log = await ask(q, context.user_data['chat_log'], language)
             context.user_data['chat_log'] = chat_log
             await update.message.reply_text(a)
         except Exception as e:
@@ -1239,16 +1316,21 @@ async def talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(location_message, reply_markup=reply_markup)
         return
 
-    # Если есть отфильтрованные рестораны, обрабатываем вопрос как нажатие на кнопку "ЕСТЬ ВОПРОС"
-    if context.user_data.get('filtered_restaurants'):
+    # Определяем тип вопроса: о ресторанах или отвлеченный
+    is_restaurant_question = await is_about_restaurants(text)
+    logger.info(f"[TALK] Question type: {'restaurant' if is_restaurant_question else 'general'}")
+
+    # Если вопрос о ресторанах
+    if is_restaurant_question:
         await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.TYPING)
         await asyncio.sleep(1)
         
+        # Получаем данные о ресторанах из контекста (если есть)
         restaurants = context.user_data.get('filtered_restaurants', [])
         restaurant_info = context.user_data.get('restaurant_info', '')
         
-        # Проверяем, хочет ли пользователь сменить район
-        if any(word in text.lower() for word in ['другой район', 'сменить район', 'не подходит', 'не нравится', 'не хочу']):
+        # Проверяем, хочет ли пользователь сменить район (только если есть отфильтрованные рестораны)
+        if restaurants and any(word in text.lower() for word in ['другой район', 'сменить район', 'не подходит', 'не нравится', 'не хочу']):
             context.user_data['in_restaurant_qa'] = False
             keyboard = [[
                 InlineKeyboardButton("РЯДОМ", callback_data='location_near'),
@@ -1259,85 +1341,75 @@ async def talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await update.message.reply_text("Хорошо, давайте подберем ресторан в другом районе!", reply_markup=reply_markup)
             return
 
-        # Формируем промпт для AI с учетом контекста
-        prompt = f"""
-        Ты - опытный консультант по ресторанам на Пхукете. Ты знаешь все о ресторанах на острове - от отзывов на TripAdvisor до информации с сайтов ресторанов и Google Maps. Ты работаешь в этом бизнесе много лет и действительно ЗНАЕШЬ все о ресторанах.
-
-        Вопрос клиента: '{text}'
-
-        Информация о ресторанах из базы данных:
-        {restaurant_info}
-
-        Структура данных о ресторане:
-        - name: название ресторана
-        - cuisine: тип кухни
-        - average_check: средний чек
-        - location: расположение
-        - features: особенности (список)
-        - atmosphere: атмосфера
-        - story_or_concept: история или концепция
-        - menu_items: блюда в меню (список)
-        - special_dishes: специальные блюда (список)
-        - wine_selection: винная карта
-        - opening_hours: часы работы
-        - contact_info: контактная информация
-
-        Правила ответов:
-        1. Всегда отвечай на основе данных из базы и своих знаний о ресторане
-        2. Отвечай на языке клиента ({language})
-        3. Будь дружелюбным и естественным
-        4. Отвечай от первого лица
-        5. Давай конкретные ответы на конкретные вопросы
-        6. Используй контекст предыдущих вопросов
-        7. Если клиент спрашивает "какие" после вопроса о наличии чего-то - перечисли 2-3 конкретных блюда
-        8. Если информации нет в базе - используй свои знания о ресторане
-        9. Если нужно больше информации - вежливо попроси уточнить
-
-        Строго запрещено:
-        1. Упоминать базу данных, AI, бота или технические детали
-        2. Использовать формальные фразы
-        3. Выдумывать информацию
-        4. Просить уточнить вопрос, если контекст понятен
-        5. Говорить, что вопрос неполный или непонятный
-        6. Использовать фразы типа "Извините" или "Пожалуйста"
-        7. Давать общие рассуждения вместо конкретики
-        8. Перечислять все особенности ресторана, если спрашивают про что-то конкретное
-        9. Использовать шаблонные фразы
-        10. Отвечать на вопрос, который не задавали
-
-        Верни только ответ на вопрос, без дополнительных пояснений.
-        """
-        
+        # Используем функцию restaurant_chat с AI-контекстным процессором для всех вопросов о ресторанах
         try:
-            # Логируем промпт
-            logger.info(f"[RESTAURANT_QA] Sending prompt to AI: {prompt}")
-            
-            # Определяем язык ответа и используем правильный task
-            response = await ai_generate('restaurant_qa', text=prompt, target_language=language)
-            
-            # Логируем ответ
-            logger.info(f"[RESTAURANT_QA] Received response from AI: {response}")
-            
-            # Отправляем ответ пользователю
+            response = await restaurant_chat(text, restaurant_info, language, context)
             await update.message.reply_text(response)
         except Exception as e:
-            logger.error(f"Error in restaurant QA: {e}")
-            error_message = await translate_message('error', language)
-            await update.message.reply_text(error_message)
+            logger.error(f"Error in restaurant_chat: {e}")
+            error_msg = await translate_message('error', language)
+            await update.message.reply_text(error_msg)
         return
 
-    # Обычный диалог
+    # Для всех остальных случаев - используем общий диалог без данных о ресторанах
+    await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.TYPING)
+    await asyncio.sleep(1)
+    
     try:
-        await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.TYPING)
-        await asyncio.sleep(1)
+        response = await general_chat(text, language)
         
-        a, chat_log = ask(text, context.user_data['chat_log'], language)
-        context.user_data['chat_log'] = chat_log
-        await update.message.reply_text(a)
+        # Создаем кнопки действий для общего диалога
+        button_reserve = await translate_message('button_reserve', language)
+        button_question = await translate_message('button_question', language)
+        button_area = await translate_message('button_area', language)
+        
+        keyboard = [
+            [
+                InlineKeyboardButton(button_reserve, callback_data="book_restaurant"),
+                InlineKeyboardButton(button_question, callback_data="ask_about_restaurant"),
+                InlineKeyboardButton(button_area, callback_data="choose_area")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(response, reply_markup=reply_markup)
     except Exception as e:
-        logger.error("Error in ask: %s", e)
-        error_message = await translate_message('error', language)
-        await update.message.reply_text(error_message)
+        logger.error(f"Error in general_chat: {e}")
+        error_msg = await translate_message('error', language)
+        await update.message.reply_text(error_msg)
+
+async def is_about_restaurants(text: str) -> bool:
+    """
+    Определяет, касается ли вопрос ресторанов или это отвлеченная тема через ChatGPT
+    """
+    try:
+        system_prompt = """Определи тип вопроса в контексте бота-консультанта по ресторанам:
+- "restaurant" = вопросы о еде, ресторанах, меню, ценах, атмосфере заведений, рекомендациях ресторанов
+- "general" = отвлеченные темы (кино, погода, работа, общие разговоры)
+Отвечай только: "restaurant" или "general"."""
+        
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": text}
+        ]
+        
+        response = client.chat.completions.create(
+            model=openai_model,
+            messages=messages,
+            temperature=0.1,  # Низкая температура для стабильности
+            max_tokens=10    # Очень короткий ответ
+        )
+        
+        result = response.choices[0].message.content.strip().lower()
+        is_restaurant = "restaurant" in result
+        
+        logger.info(f"[QUESTION_TYPE] '{text}' -> {result} -> {'restaurant' if is_restaurant else 'general'}")
+        return is_restaurant
+        
+    except Exception as e:
+        logger.error(f"Error in is_about_restaurants: {e}")
+        # Fallback: если ошибка, считаем что это общий вопрос
+        return False
 
 async def check_budget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Показывает текущий выбранный бюджет"""
@@ -1490,10 +1562,10 @@ async def show_other_price_callback(update: Update, context: ContextTypes.DEFAUL
                     try:
                         if cuisine:
                             await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
-                            cuisine = (await ask(f"Переведи на {language} (только тип кухни, без лишних слов): {cuisine}", None, language))[0]
+                            cuisine = await translate_cuisine(cuisine, language)
                         if desc:
                             await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
-                            desc = (await ask(f"Переведи на {language} (только краткое описание ресторана, без лишних слов): {desc}", None, language))[0]
+                            desc = await translate_text(desc, language)
                     except Exception as e:
                         logger.error(f"Ошибка перевода описания ресторана: {e}")
                 msg += f"• {r['name']} — {r['average_check']}\n"
@@ -1525,10 +1597,10 @@ async def show_other_price_callback(update: Update, context: ContextTypes.DEFAUL
                         try:
                             if cuisine:
                                 await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
-                                cuisine = (await ask(f"Переведи на {language} (только тип кухни, без лишних слов): {cuisine}", None, language))[0]
+                                cuisine = await translate_cuisine(cuisine, language)
                             if desc:
                                 await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
-                                desc = (await ask(f"Переведи на {language} (только краткое описание ресторана, без лишних слов): {desc}", None, language))[0]
+                                desc = await translate_text(desc, language)
                         except Exception as e:
                             logger.error(f"Ошибка перевода описания ресторана: {e}")
                     rest_summaries.append(f"{r['name']} — {cuisine}. {desc}")
@@ -1547,7 +1619,7 @@ async def show_other_price_callback(update: Update, context: ContextTypes.DEFAUL
                         f"Вот список ресторанов, которые мы рекомендуем: {rest_text}. "
                         f"{wish_part} Помоги пользователю определиться с выбором, кратко подскажи отличия, предложи выбрать или задать вопросы. Не используй стандартные приветствия, не повторяй фразы типа 'Я знаю о ресторанах...' или 'Просто расскажите...'. {ban_meal_words} Пиши на языке пользователя ({language}), не упоминай слово 'бот', не повторяй названия ресторанов."
                     )
-                ai_msg, chat_log = ask(prompt, context.user_data.get('chat_log'), language)
+                ai_msg, chat_log = await ask(prompt, context.user_data.get('chat_log'), language)
                 context.user_data['chat_log'] = chat_log
                 await update.effective_chat.send_message(ai_msg)
             except Exception as e:
@@ -1659,6 +1731,45 @@ async def change_budget_callback(update: Update, context: ContextTypes.DEFAULT_T
     
     # Показываем кнопки выбора бюджета с контекстом возврата
     await BudgetManager.show_budget_selection(update, context, return_context)
+
+async def translate_cuisine(cuisine_text: str, target_language: str) -> str:
+    """
+    Специальная функция для перевода типов кухни с правильным контекстом.
+    Использует системный промпт для экономии токенов.
+    """
+    try:
+        if target_language == 'en':
+            return cuisine_text
+            
+        system_prompt = f"""You are a restaurant cuisine type translator to {target_language}.
+Context: You are translating restaurant cuisine types and food categories for restaurant listings.
+Rules:
+- Translate cuisine types in the context of restaurants and food
+- Consider that these are restaurant categories, not general adjectives
+- "Healthy" refers to healthy food/cuisine, not a healthy person
+- "Italian" refers to Italian cuisine/food
+- "Asian" refers to Asian cuisine/food  
+- "Vegetarian" refers to vegetarian food/cuisine
+- "Seafood" refers to seafood cuisine/restaurants
+- Use natural expressions for restaurant categories in {target_language}
+- Return ONLY the translation, no explanations"""
+        
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": cuisine_text}
+        ]
+        response = client.chat.completions.create(
+            model=openai_model,
+            messages=messages,
+            temperature=0.3,
+            max_tokens=100
+        )
+        translated = response.choices[0].message.content.strip()
+        logger.info(f"[TRANSLATE_CUISINE] Translated '{cuisine_text}' to '{translated}' for language {target_language}")
+        return translated
+    except Exception as e:
+        logger.error(f"[TRANSLATE_CUISINE] Error translating cuisine: {e}")
+        return cuisine_text
 
 def main():
     app = ApplicationBuilder().token(telegram_token).build()
