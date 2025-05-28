@@ -1074,7 +1074,11 @@ async def show_pretty_restaurants(update, context):
             await asyncio.sleep(1)
             welcome_msg = await translate_message('consultation_welcome', language)
             logger.info(f"[SHOW_RESTAURANTS] Sending welcome message with keyboard: {welcome_msg}")
-            await update.effective_chat.send_message(welcome_msg, reply_markup=reply_markup)
+            welcome_message = await update.effective_chat.send_message(welcome_msg, reply_markup=reply_markup)
+            
+            # Сохраняем ID приветственного сообщения с кнопками для последующего редактирования
+            context.user_data['consultation_welcome_message_id'] = welcome_message.message_id
+            logger.info(f"[SHOW_RESTAURANTS] Saved welcome message ID: {welcome_message.message_id}")
             logger.info("[SHOW_RESTAURANTS] Welcome message sent with keyboard")
 
         cur.close()
@@ -1277,6 +1281,49 @@ async def talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     logger.info("Processing message from %s: %s", username, text)
 
+    # Удаляем кнопки из приветственного сообщения при первом сообщении пользователя
+    consultation_welcome_message_id = context.user_data.get('consultation_welcome_message_id')
+    if consultation_welcome_message_id:
+        try:
+            # Получаем текст приветственного сообщения
+            welcome_msg = await translate_message('consultation_welcome', context.user_data.get('language', 'ru'))
+            # Редактируем сообщение, убирая кнопки, но оставляя текст
+            await context.bot.edit_message_text(
+                chat_id=update.effective_chat.id,
+                message_id=consultation_welcome_message_id,
+                text=welcome_msg
+            )
+            logger.info(f"[TALK] Removed buttons from consultation welcome message {consultation_welcome_message_id}")
+            # Удаляем ID из контекста, чтобы не повторять операцию
+            context.user_data.pop('consultation_welcome_message_id', None)
+        except Exception as e:
+            logger.error(f"[TALK] Error removing buttons from welcome message: {e}")
+            # Удаляем ID из контекста даже при ошибке
+            context.user_data.pop('consultation_welcome_message_id', None)
+
+    # Удаляем кнопки из предыдущего сообщения бота (если есть)
+    last_bot_message_id = context.user_data.get('last_bot_message_with_buttons')
+    if last_bot_message_id:
+        try:
+            # Получаем текст предыдущего сообщения из контекста
+            last_bot_message_text = context.user_data.get('last_bot_message_text', '')
+            if last_bot_message_text:
+                # Редактируем сообщение, убирая кнопки, но оставляя текст
+                await context.bot.edit_message_text(
+                    chat_id=update.effective_chat.id,
+                    message_id=last_bot_message_id,
+                    text=last_bot_message_text
+                )
+                logger.info(f"[TALK] Removed buttons from previous bot message {last_bot_message_id}")
+            # Удаляем ID из контекста
+            context.user_data.pop('last_bot_message_with_buttons', None)
+            context.user_data.pop('last_bot_message_text', None)
+        except Exception as e:
+            logger.error(f"[TALK] Error removing buttons from previous bot message: {e}")
+            # Удаляем ID из контекста даже при ошибке
+            context.user_data.pop('last_bot_message_with_buttons', None)
+            context.user_data.pop('last_bot_message_text', None)
+
     # Если это первое сообщение после старта (awaiting_language), то приветствие и кнопки
     if context.user_data.get('awaiting_language'):
         context.user_data['awaiting_language'] = False
@@ -1344,7 +1391,28 @@ async def talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         # Используем функцию restaurant_chat с AI-контекстным процессором для всех вопросов о ресторанах
         try:
             response = await restaurant_chat(text, restaurant_info, language, context)
-            await update.message.reply_text(response)
+            
+            # Создаем кнопки действий для ресторанных вопросов
+            button_reserve = await translate_message('button_reserve', language)
+            button_question = await translate_message('button_question', language)
+            button_area = await translate_message('button_area', language)
+            
+            keyboard = [
+                [
+                    InlineKeyboardButton(button_reserve, callback_data="book_restaurant"),
+                    InlineKeyboardButton(button_question, callback_data="ask_about_restaurant"),
+                    InlineKeyboardButton(button_area, callback_data="choose_area")
+                ]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            # Отправляем ответ с кнопками и сохраняем ID сообщения
+            bot_message = await update.message.reply_text(response, reply_markup=reply_markup)
+            
+            # Сохраняем ID и текст сообщения для последующего удаления кнопок
+            context.user_data['last_bot_message_with_buttons'] = bot_message.message_id
+            context.user_data['last_bot_message_text'] = response
+            logger.info(f"[TALK] Saved bot message ID {bot_message.message_id} for restaurant response")
         except Exception as e:
             logger.error(f"Error in restaurant_chat: {e}")
             error_msg = await translate_message('error', language)
@@ -1372,7 +1440,13 @@ async def talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await update.message.reply_text(response, reply_markup=reply_markup)
+        # Отправляем ответ с кнопками и сохраняем ID сообщения
+        bot_message = await update.message.reply_text(response, reply_markup=reply_markup)
+        
+        # Сохраняем ID и текст сообщения для последующего удаления кнопок
+        context.user_data['last_bot_message_with_buttons'] = bot_message.message_id
+        context.user_data['last_bot_message_text'] = response
+        logger.info(f"[TALK] Saved bot message ID {bot_message.message_id} for general response")
     except Exception as e:
         logger.error(f"Error in general_chat: {e}")
         error_msg = await translate_message('error', language)
