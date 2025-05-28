@@ -111,21 +111,30 @@ class BudgetManager:
         await query.answer()
         await query.message.delete()
         
+        logger.info(f"[BUDGET_MANAGER] Starting budget change to: {new_budget}")
+        
         state = UserState(context)
         context._user_id = update.effective_user.id  # Сохраняем для UserState
         state.set_budget(new_budget)
         
+        logger.info(f"[BUDGET_MANAGER] Budget set to: {new_budget}")
+        logger.info(f"[BUDGET_MANAGER] Current state - budget: {state.budget}, location: {state.location}")
+        
         # Получаем контекст возврата
         return_context = context.user_data.get('return_context')
+        logger.info(f"[BUDGET_MANAGER] Return context: {return_context}")
         
         if return_context and return_context.get('screen') == 'restaurant_list':
             # Возвращаемся к списку ресторанов с новым бюджетом
+            logger.info("[BUDGET_MANAGER] Returning to restaurant list with new budget")
             await RestaurantDisplay.show_restaurants(update, context)
         elif state.is_ready_for_restaurants():
             # Если есть и бюджет и локация - показываем рестораны
+            logger.info("[BUDGET_MANAGER] State ready for restaurants, showing restaurants")
             await RestaurantDisplay.show_restaurants(update, context)
         else:
             # Иначе переходим к выбору локации
+            logger.info("[BUDGET_MANAGER] State not ready, showing location selection")
             await LocationManager.show_location_selection(update, context)
 
 class RestaurantDisplay:
@@ -134,12 +143,25 @@ class RestaurantDisplay:
     @staticmethod
     async def show_restaurants(update, context):
         """Показывает рестораны на основе текущего состояния"""
+        logger.info("[RESTAURANT_DISPLAY] Starting show_restaurants")
+        
         state = UserState(context)
         state.set_screen('restaurant_list')
         
-        # Очищаем предыдущие сообщения
-        await RestaurantDisplay._clear_previous_messages(update, context)
+        logger.info(f"[RESTAURANT_DISPLAY] State: budget={state.budget}, location={state.location}")
         
+        # Удаляем предыдущие сообщения с предложением изменить бюджет, если они есть
+        previous_message_ids = context.user_data.get('budget_change_message_ids', [])
+        for msg_id in previous_message_ids:
+            try:
+                await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=msg_id)
+                logger.info(f"[RESTAURANT_DISPLAY] Deleted previous message {msg_id}")
+            except Exception as e:
+                logger.error(f"[RESTAURANT_DISPLAY] Error deleting message {msg_id}: {e}")
+        # Очищаем список ID сообщений
+        context.user_data['budget_change_message_ids'] = []
+        
+        logger.info("[RESTAURANT_DISPLAY] Calling show_pretty_restaurants")
         # Вызываем существующую функцию
         await show_pretty_restaurants(update, context)
     
@@ -558,7 +580,19 @@ async def show_budget_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def budget_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обработчик выбора бюджета - теперь использует централизованную архитектуру"""
-    budget = update.callback_query.data.split('_')[1]
+    budget_number = update.callback_query.data.split('_')[1]
+    
+    # Конвертируем числовое значение в символы доллара для базы данных
+    budget_map = {
+        '1': '$',
+        '2': '$$',
+        '3': '$$$',
+        '4': '$$$$'
+    }
+    budget = budget_map.get(budget_number, budget_number)
+    
+    logger.info(f"[BUDGET_CALLBACK] Converting budget_number={budget_number} to budget={budget}")
+    
     await BudgetManager.handle_budget_change(update, context, budget)
     
     # Обновляем команды меню после выбора бюджета
@@ -716,7 +750,7 @@ async def show_pretty_restaurants(update, context):
     budget = context.user_data.get('budget')
     language = context.user_data.get('language', 'ru')
 
-    logger.info(f"[SHOW_RESTAURANTS] Starting with location={location}, budget={budget}, language={language}")
+    logger.info(f"[SHOW_RESTAURANTS] Starting with location={location}, budget={budget} (type: {type(budget)}), language={language}")
 
     # Удаляем предыдущие сообщения с предложением изменить бюджет, если они есть
     previous_message_ids = context.user_data.get('budget_change_message_ids', [])
@@ -729,15 +763,9 @@ async def show_pretty_restaurants(update, context):
     # Очищаем список ID сообщений
     context.user_data['budget_change_message_ids'] = []
 
-    # Для строкового фильтра по бюджету
-    budget_map = {
-        '1': '$',
-        '2': '$$',
-        '3': '$$$',
-        '4': '$$$$'
-    }
-    budget_str = budget_map.get(budget, None)
-    logger.info(f"[SHOW_RESTAURANTS] Using budget_str={budget_str}")
+    # Бюджет уже приходит в правильном формате ($, $$, $$$, $$$$)
+    budget_str = budget
+    logger.info(f"[SHOW_RESTAURANTS] Using budget_str={budget_str} directly from budget={budget}")
 
     try:
         conn = get_db_connection()
@@ -770,9 +798,19 @@ async def show_pretty_restaurants(update, context):
                 # Создаем кнопки для доступных бюджетов
                 keyboard = []
                 row = []
+                
+                # Маппинг для конвертации символов доллара в числа для callback_data
+                dollar_to_number = {
+                    '$': '1',
+                    '$$': '2', 
+                    '$$$': '3',
+                    '$$$$': '4'
+                }
+                
                 for budget in available_budgets:
-                    budget_label = budget_map.get(budget, budget)
-                    row.append(InlineKeyboardButton(budget_label, callback_data=f'budget_{budget}'))
+                    budget_label = budget  # Показываем символы доллара как есть
+                    budget_number = dollar_to_number.get(budget, budget)
+                    row.append(InlineKeyboardButton(budget_label, callback_data=f'budget_{budget_number}'))
                     if len(row) == 3:  # Максимум 3 кнопки бюджета в строке
                         keyboard.append(row)
                         row = []
@@ -834,9 +872,19 @@ async def show_pretty_restaurants(update, context):
                 # Создаем кнопки для доступных бюджетов
                 keyboard = []
                 row = []
+                
+                # Маппинг для конвертации символов доллара в числа для callback_data
+                dollar_to_number = {
+                    '$': '1',
+                    '$$': '2', 
+                    '$$$': '3',
+                    '$$$$': '4'
+                }
+                
                 for budget in available_budgets:
-                    budget_label = budget_map.get(budget, budget)
-                    row.append(InlineKeyboardButton(budget_label, callback_data=f'budget_{budget}'))
+                    budget_label = budget  # Показываем символы доллара как есть
+                    budget_number = dollar_to_number.get(budget, budget)
+                    row.append(InlineKeyboardButton(budget_label, callback_data=f'budget_{budget_number}'))
                     if len(row) == 3:  # Максимум 3 кнопки бюджета в строке
                         keyboard.append(row)
                         row = []
