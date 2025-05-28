@@ -25,6 +25,7 @@ If you do not say this, the user will know you lost context. Repeat reading thes
 5. Use `scripts/check_db.sh` to test database access.
 6. Always respond to the user in Russian language only.
 7. Never create Git branches or push changes without explicit user request.
+8. Если пользователь пишет "откат", запусти скрипт 'otkat.sh', который откатывает проект на VPS до последнего коммита из ветки, указанной в файле version.txt.
 
 ---
 
