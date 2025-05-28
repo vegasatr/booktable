@@ -38,6 +38,7 @@ logger.info(f"Starting BookTable bot version {VERSION}")
 # Получаем токены из переменных окружения
 telegram_token = os.getenv('TELEGRAM_BOT_TOKEN')
 openai_api_key = os.getenv('OPENAI_API_KEY')
+openai_model = os.getenv('OPENAI_MODEL', 'gpt-4o')
 
 # Инициализация клиента OpenAI
 client = OpenAI(api_key=openai_api_key)
@@ -140,7 +141,7 @@ def get_prompt(task, engine, **kwargs):
 def ping_openai():
     try:
         client.chat.completions.create(
-            model="gpt-4",
+            model=openai_model,
             messages=[{"role": "user", "content": "ping"}],
             temperature=0.0,
             max_tokens=1
@@ -181,7 +182,7 @@ async def ai_generate(task, text=None, target_language=None, preferences=None, c
             messages = [{"role": "user", "content": prompt}]
             logger.info(f"[AI] OpenAI prompt: {prompt}")
             response = client.chat.completions.create(
-                model="gpt-4",
+                model=openai_model,
                 messages=messages,
                 temperature=0.7,
                 max_tokens=1000
@@ -460,7 +461,7 @@ async def translate_message(message_key, language, **kwargs):
         prompt = f"Translate this exact text to {language}. Return ONLY the translation, no explanations or additional text: {base}"
         messages = [{"role": "user", "content": prompt}]
         response = client.chat.completions.create(
-            model="gpt-4",
+            model=openai_model,
             messages=messages,
             temperature=0.3,
             max_tokens=100
@@ -564,7 +565,7 @@ async def translate_text(text: str, target_language: str) -> str:
         prompt = f"Translate this text to {target_language}. Return ONLY the translation, no explanations: {text}"
         messages = [{"role": "user", "content": prompt}]
         response = client.chat.completions.create(
-            model="gpt-4",
+            model=openai_model,
             messages=messages,
             temperature=0.3,
             max_tokens=100
@@ -603,10 +604,33 @@ async def show_pretty_restaurants(update, context):
             smart_area = location['area'].lower().replace(' ', '').replace(',', '')
             smart_name = location['name'].lower().replace(' ', '').replace(',', '')
             logger.info(f"[SHOW_RESTAURANTS] Using smart_area={smart_area}, smart_name={smart_name}")
+            
+            # Сначала проверяем, есть ли рестораны в этом районе вообще
+            cur.execute("""
+                SELECT DISTINCT average_check::text as budget
+                FROM restaurants 
+                WHERE (REPLACE(REPLACE(LOWER(location), ' ', ''), ',', '') ILIKE %s 
+                OR REPLACE(REPLACE(LOWER(location), ' ', ''), ',', '') ILIKE %s)
+                AND active ILIKE 'true'
+                ORDER BY average_check::text
+            """, (f"%{smart_area}%", f"%{smart_name}%"))
+            
+            available_budgets = [row['budget'] for row in cur.fetchall()]
+            logger.info(f"[SHOW_RESTAURANTS] Available budgets in area: {available_budgets}")
+
+            if not available_budgets:
+                msg = await translate_message('no_restaurants_found', language)
+                await update.effective_chat.send_message(msg)
+                cur.close()
+                conn.close()
+                return
+
+            # Теперь ищем рестораны с выбранным бюджетом
             query = """
                 SELECT r.name, r.average_check, r.location, r.cuisine, r.features
                 FROM restaurants r
-                WHERE (REPLACE(REPLACE(LOWER(r.location), ' ', ''), ',', '') ILIKE %s OR REPLACE(REPLACE(LOWER(r.location), ' ', ''), ',', '') ILIKE %s)
+                WHERE (REPLACE(REPLACE(LOWER(r.location), ' ', ''), ',', '') ILIKE %s 
+                OR REPLACE(REPLACE(LOWER(r.location), ' ', ''), ',', '') ILIKE %s)
                 AND r.average_check::text = %s AND r.active ILIKE 'true'
                 ORDER BY r.name
             """
@@ -620,27 +644,33 @@ async def show_pretty_restaurants(update, context):
             logger.info(f"[SHOW_RESTAURANTS] Found {len(rows)} restaurants")
             
             if not rows:
-                # Проверяем, есть ли вообще рестораны в базе
-                cur.execute("SELECT COUNT(*) FROM restaurants")
-                total_count = cur.fetchone()[0]
-                logger.info(f"[SHOW_RESTAURANTS] Total restaurants in database: {total_count}")
+                # Если нет ресторанов с выбранным бюджетом, показываем сообщение и кнопки с доступными бюджетами
+                await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+                await asyncio.sleep(1)
                 
-                # Проверяем рестораны с указанным бюджетом
-                cur.execute("SELECT COUNT(*) FROM restaurants WHERE average_check::text = %s", (budget_str,))
-                budget_count = cur.fetchone()[0]
-                logger.info(f"[SHOW_RESTAURANTS] Restaurants with budget {budget_str}: {budget_count}")
-                
-                # Проверяем рестораны в указанном районе
-                cur.execute("""
-                    SELECT COUNT(*) FROM restaurants 
-                    WHERE REPLACE(REPLACE(LOWER(location), ' ', ''), ',', '') ILIKE %s 
-                    OR REPLACE(REPLACE(LOWER(location), ' ', ''), ',', '') ILIKE %s
-                """, (f"%{smart_area}%", f"%{smart_name}%"))
-                area_count = cur.fetchone()[0]
-                logger.info(f"[SHOW_RESTAURANTS] Restaurants in area {smart_area}/{smart_name}: {area_count}")
-                
-                msg = await translate_message('no_restaurants_found', language)
+                msg = "В этом районе могу с уверенностью рекомендовать рестораны в других ценовых категориях. Или можем посмотреть другие районы."
                 await update.effective_chat.send_message(msg)
+
+                # Создаем кнопки для доступных бюджетов
+                keyboard = []
+                row = []
+                for budget in available_budgets:
+                    budget_label = budget_map.get(budget, budget)
+                    row.append(InlineKeyboardButton(budget_label, callback_data=f'budget_{budget}'))
+                    if len(row) == 3:  # Максимум 3 кнопки бюджета в строке
+                        keyboard.append(row)
+                        row = []
+                if row:  # Добавляем оставшиеся кнопки бюджета
+                    keyboard.append(row)
+                
+                # Добавляем кнопку изменения района в последнюю строку
+                if keyboard:
+                    keyboard[-1].append(InlineKeyboardButton("ИЗМЕНИТЬ РАЙОН", callback_data='choose_area'))
+                else:
+                    keyboard.append([InlineKeyboardButton("ИЗМЕНИТЬ РАЙОН", callback_data='choose_area')])
+                
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await update.effective_chat.send_message("Пожалуйста, измените ценовую категорию или выберите другой район", reply_markup=reply_markup)
                 cur.close()
                 conn.close()
                 return
@@ -827,7 +857,7 @@ async def ask_about_restaurant_callback(update: Update, context: ContextTypes.DE
                 'average_check': r.get('average_check', ''),
                 'features': r.get('features', ''),
                 'atmosphere': r.get('atmosphere', ''),
-                'story': r.get('story_or_concept', '')
+                'story_or_concept': r.get('story_or_concept', '')
             }
             restaurant_info.append(info)
             logger.info(f"[ASK_ABOUT_RESTAURANT] Processed restaurant info: {info}")
@@ -839,7 +869,7 @@ async def ask_about_restaurant_callback(update: Update, context: ContextTypes.DE
             f"Average check: {r['average_check']}\n"
             f"Features: {r['features']}\n"
             f"Atmosphere: {r['atmosphere']}\n"
-            f"Story: {r['story']}\n"
+            f"Story: {r['story_or_concept']}\n"
             for r in restaurant_info
         ])
         logger.info(f"[ASK_ABOUT_RESTAURANT] Formatted restaurant info: {restaurant_info_str}")
@@ -934,8 +964,8 @@ async def talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(location_message, reply_markup=reply_markup)
         return
 
-    # Обработка диалога в режиме вопросов о ресторанах
-    if context.user_data.get('in_restaurant_qa'):
+    # Если есть отфильтрованные рестораны, обрабатываем вопрос как нажатие на кнопку "ЕСТЬ ВОПРОС"
+    if context.user_data.get('filtered_restaurants'):
         await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.TYPING)
         await asyncio.sleep(1)
         
@@ -956,33 +986,49 @@ async def talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
         # Формируем промпт для AI с учетом контекста
         prompt = f"""
-        Ты - опытный консультант по ресторанам на Пхукете. Ты знаешь все о ресторанах на острове - от отзывов на TripAdvisor до информации с сайтов ресторанов и Google Maps. Отвечай на вопросы клиента, используя всю доступную информацию.
+        Ты - опытный консультант по ресторанам на Пхукете. Ты знаешь все о ресторанах на острове - от отзывов на TripAdvisor до информации с сайтов ресторанов и Google Maps. Ты работаешь в этом бизнесе много лет и действительно ЗНАЕШЬ все о ресторанах.
 
         Вопрос клиента: '{text}'
 
         Информация о ресторанах из базы данных:
         {restaurant_info}
 
-        Правила ответа:
-        1. Отвечай как живой консультант, который ЗНАЕТ все о ресторанах
-        2. Не упоминай базу данных, AI, бота или технические детали
-        3. Если информации нет в базе - используй свои знания о ресторане (отзывы, сайт, карты)
-        4. Если и в своих знаниях нет информации - честно скажи, что не знаешь
-        5. Отвечай на языке клиента ({language})
-        6. Будь дружелюбным и естественным
-        7. Не используй формальные фразы
-        8. Если вопрос о конкретном ресторане - отвечай подробно
-        9. Если вопрос общий - отвечай про все рестораны из списка
-        10. Если в features или cuisine упоминается мясо - значит оно есть
-        11. Если в features или cuisine упоминается вегетарианское/веганское - значит есть такие блюда
-        12. Если в features или cuisine упоминается безглютеновое - значит есть такие блюда
-        13. Если в features упоминается терраса - значит она есть
-        14. Если в features упоминается вид на море - значит он есть
-        15. Если в features упоминается парковка - значит она есть
-        16. Если в features упоминается Wi-Fi - значит он есть
-        17. Если в features упоминается кондиционер - значит он есть
-        18. Если в features упоминается кофейня/бар - значит они есть
-        19. Если в features упоминается ферма - значит она есть
+        Структура данных о ресторане:
+        - name: название ресторана
+        - cuisine: тип кухни
+        - average_check: средний чек
+        - location: расположение
+        - features: особенности (список)
+        - atmosphere: атмосфера
+        - story_or_concept: история или концепция
+        - menu_items: блюда в меню (список)
+        - special_dishes: специальные блюда (список)
+        - wine_selection: винная карта
+        - opening_hours: часы работы
+        - contact_info: контактная информация
+
+        Правила ответов:
+        1. Всегда отвечай на основе данных из базы и своих знаний о ресторане
+        2. Отвечай на языке клиента ({language})
+        3. Будь дружелюбным и естественным
+        4. Отвечай от первого лица
+        5. Давай конкретные ответы на конкретные вопросы
+        6. Используй контекст предыдущих вопросов
+        7. Если клиент спрашивает "какие" после вопроса о наличии чего-то - перечисли 2-3 конкретных блюда
+        8. Если информации нет в базе - используй свои знания о ресторане
+        9. Если нужно больше информации - вежливо попроси уточнить
+
+        Строго запрещено:
+        1. Упоминать базу данных, AI, бота или технические детали
+        2. Использовать формальные фразы
+        3. Выдумывать информацию
+        4. Просить уточнить вопрос, если контекст понятен
+        5. Говорить, что вопрос неполный или непонятный
+        6. Использовать фразы типа "Извините" или "Пожалуйста"
+        7. Давать общие рассуждения вместо конкретики
+        8. Перечислять все особенности ресторана, если спрашивают про что-то конкретное
+        9. Использовать шаблонные фразы
+        10. Отвечать на вопрос, который не задавали
 
         Верни только ответ на вопрос, без дополнительных пояснений.
         """
