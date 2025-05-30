@@ -207,28 +207,48 @@ async def handle_custom_guests_input(update, context):
     language = context.user_data.get('language', 'en')
     
     try:
-        # Пытаемся распарсить количество гостей с помощью AI
-        prompt = f"Parse this number of guests: '{text}'. Return only a number (1-50) or 'INVALID' if cannot parse or number is unreasonable."
-        
-        result = await ai_generate('parse_guests', text=prompt, target_language='en')
-        
-        if result and result.strip() != 'INVALID':
-            try:
-                guests_count = int(result.strip())
+        # Сначала пробуем простой парсинг числа
+        try:
+            guests_count = int(text)
+            # Проверяем разумные пределы
+            if 1 <= guests_count <= 999:
+                context.user_data['booking_data']['guests'] = guests_count
+                context.user_data['booking_data']['step'] = 'date_selection'
                 
-                # Проверяем разумные пределы
-                if 1 <= guests_count <= 50:
-                    context.user_data['booking_data']['guests'] = guests_count
-                    context.user_data['booking_data']['step'] = 'date_selection'
+                await BookingManager._ask_for_date(update, context)
+                return True
+            elif guests_count > 999:
+                await update.message.reply_text("Максимальное количество гостей: 999. Попробуйте еще раз.")
+                return True
+            else:
+                await update.message.reply_text("Минимальное количество гостей: 1. Попробуйте еще раз.")
+                return True
+        except ValueError:
+            # Если не число, пытаемся распарсить с помощью AI
+            prompt = f"Parse this number of guests: '{text}'. Return only a number (1-999) or 'INVALID' if cannot parse or number is unreasonable."
+            
+            result = await ai_generate('parse_guests', text=prompt, target_language='en')
+            
+            if result and result.strip() != 'INVALID':
+                try:
+                    guests_count = int(result.strip())
                     
-                    await BookingManager._ask_for_date(update, context)
-                    return True
-                    
-            except ValueError:
-                pass
+                    # Проверяем разумные пределы
+                    if 1 <= guests_count <= 999:
+                        context.user_data['booking_data']['guests'] = guests_count
+                        context.user_data['booking_data']['step'] = 'date_selection'
+                        
+                        await BookingManager._ask_for_date(update, context)
+                        return True
+                    elif guests_count > 999:
+                        await update.message.reply_text("Максимальное количество гостей: 999. Попробуйте еще раз.")
+                        return True
+                        
+                except ValueError:
+                    pass
         
         # Если не удалось распарсить
-        await update.message.reply_text("Пожалуйста, укажите количество гостей числом (например: 8 или восемь)")
+        await update.message.reply_text("Пожалуйста, укажите количество гостей числом")
         return True
         
     except Exception as e:

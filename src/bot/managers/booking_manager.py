@@ -142,30 +142,56 @@ class BookingManager:
         """Спрашивает время бронирования"""
         language = context.user_data.get('language', 'en')
         
-        logger.info(f"[BOOKING] _ask_for_time: language={language}, user_data keys: {list(context.user_data.keys())}")
+        # Получаем время работы ресторана
+        restaurant_data = await get_restaurant_working_hours(restaurant['name'])
+        
+        # Парсим время работы (примерный формат: "9:00-23:00")
+        opening_time = datetime_time(9, 0)  # По умолчанию 9:00
+        closing_time = datetime_time(23, 0)  # По умолчанию 23:00
+        
+        if restaurant_data and restaurant_data.get('working_hours'):
+            working_hours = restaurant_data.get('working_hours', '')
+            if isinstance(working_hours, str) and '-' in working_hours:
+                try:
+                    open_str, close_str = working_hours.split('-')
+                    opening_time = datetime.strptime(open_str.strip(), "%H:%M").time()
+                    closing_time = datetime.strptime(close_str.strip(), "%H:%M").time()
+                except:
+                    pass  # Используем значения по умолчанию
+        
+        # Проверяем текущее время
+        now = datetime.now().time()
+        current_date = datetime.now().date()
+        
+        # Определяем доступные времена (с 30-минутными интервалами)
+        times = []
+        current_hour = opening_time.hour
+        current_minute = opening_time.minute
+        
+        while datetime_time(current_hour, current_minute) < closing_time:
+            time_obj = datetime_time(current_hour, current_minute)
+            
+            # Добавляем время если оно после текущего времени (для сегодня)
+            if time_obj > now or current_date != datetime.now().date():
+                times.append(time_obj)
+            
+            # Увеличиваем на 30 минут
+            current_minute += 30
+            if current_minute >= 60:
+                current_minute = 0
+                current_hour += 1
+        
+        # Берем первые 4 времени
+        available_times = times[:4] if times else [
+            datetime_time(18, 0), datetime_time(18, 30), 
+            datetime_time(19, 0), datetime_time(19, 30)
+        ]
         
         question = await translate_message('booking_time_question', language)
         
-        # Генерируем варианты времени (через 15 минут от текущего + 4 слота по 30 мин)
-        now = datetime.now()
-        start_time = now + timedelta(minutes=15)
-        
-        # ИСПРАВЛЕНО: Округляем время ВВЕРХ до ближайших 00 или 30 минут
-        if start_time.minute < 30:
-            # Если время до 30 минут - округляем до 30
-            start_time = start_time.replace(minute=30, second=0, microsecond=0)
-        elif start_time.minute > 30:
-            # Если время после 30 минут - округляем до следующего часа
-            start_time = start_time.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
-        else:
-            # Если точно 30 минут - переходим к следующему часу (следующий слот)
-            start_time = start_time.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
-        
-        logger.info(f"[BOOKING] Current time: {now.strftime('%H:%M')}, suggested start time: {start_time.strftime('%H:%M')}")
-        
+        # Создаем кнопки времени
         time_buttons = []
-        for i in range(4):
-            time_slot = start_time + timedelta(minutes=i*30)
+        for time_slot in available_times:
             time_str = time_slot.strftime("%H:%M")
             time_buttons.append(InlineKeyboardButton(
                 time_str, callback_data=f"book_time_{time_str}"
@@ -241,14 +267,44 @@ class BookingManager:
     async def _ask_for_date(update, context):
         """Спрашивает дату бронирования"""
         language = context.user_data.get('language', 'en')
+        restaurant = context.user_data['booking_data']['restaurant']
         
-        question = await translate_message('booking_date_question', language)
+        # Получаем время работы ресторана
+        restaurant_data = await get_restaurant_working_hours(restaurant['name'])
         
-        date_buttons = [
-            InlineKeyboardButton("СЕГОДНЯ", callback_data="book_date_today"),
+        # Парсим время работы (примерный формат: "9:00-23:00")
+        closing_time = datetime_time(23, 0)  # По умолчанию 23:00
+        
+        if restaurant_data and restaurant_data.get('working_hours'):
+            working_hours = restaurant_data.get('working_hours', '')
+            if isinstance(working_hours, str) and '-' in working_hours:
+                try:
+                    _, close_str = working_hours.split('-')
+                    closing_time = datetime.strptime(close_str.strip(), "%H:%M").time()
+                except:
+                    pass  # Используем значения по умолчанию
+        
+        # Проверяем текущее время
+        now = datetime.now().time()
+        today_available = now < closing_time
+        
+        # Выбираем подходящее сообщение
+        if today_available:
+            question = await translate_message('booking_date_question', language)  # "Мы бронируем на сегодня"
+        else:
+            # Заменяем сообщение на "завтра" если сегодня уже поздно
+            question = "Мы бронируем на завтра, правильно? Или вы предпочли бы другую дату?"
+        
+        # Создаем кнопки в зависимости от доступности
+        date_buttons = []
+        
+        if today_available:
+            date_buttons.append(InlineKeyboardButton("СЕГОДНЯ", callback_data="book_date_today"))
+        
+        date_buttons.extend([
             InlineKeyboardButton("ЗАВТРА", callback_data="book_date_tomorrow"),
             InlineKeyboardButton("ДРУГОЕ", callback_data="book_date_custom")
-        ]
+        ])
         
         keyboard = InlineKeyboardMarkup([date_buttons])
         
@@ -279,11 +335,14 @@ class BookingManager:
         
         question = await translate_message('booking_custom_guests', language)
         
-        # Убираем кнопки, ждем текстовый ввод
+        # Добавляем кнопку "Меню" чтобы она не пропадала
+        menu_button = InlineKeyboardButton("🏠 МЕНЮ", callback_data="main_menu")
+        keyboard = InlineKeyboardMarkup([[menu_button]])
+        
         if hasattr(update, 'callback_query') and update.callback_query:
-            await update.callback_query.edit_message_text(question)
+            await update.callback_query.edit_message_text(question, reply_markup=keyboard)
         else:
-            await update.message.reply_text(question)
+            await update.message.reply_text(question, reply_markup=keyboard)
         
         # Устанавливаем состояние ожидания количества гостей
         context.user_data['booking_data']['step'] = 'waiting_custom_guests'
