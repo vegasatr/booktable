@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Настройка логирования
-LOG_FILE="bot_startup.log"
+LOG_FILE="logs/bot_startup.log"
 exec 1> >(tee -a "$LOG_FILE")
 exec 2> >(tee -a "$LOG_FILE" >&2)
 

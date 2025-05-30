@@ -28,6 +28,12 @@ If you do not say this, the user will know you lost context. Repeat reading thes
 8. Если пользователь пишет "откат", запусти скрипт 'scripts/otkat.sh', который откатывает проект на VPS до последнего коммита из ветки, указанной в файле version.txt.
 9. **ОБЯЗАТЕЛЬНО**: После создания нового функционала обязательно дорабатывай автоматические тесты (unit и integration) для покрытия новой функциональности. Без тестов функционал считается незавершенным.
 10. **LEGACY ТЕСТЫ**: Если старые тесты не подходят под новую реализацию кода (изменилась архитектура, логика, API), то ОБЯЗАТЕЛЬНО переписывай эти тесты под актуальную реализацию. Устаревшие тесты должны быть обновлены, а не игнорироваться.
+11. **МОДУЛЬ БРОНИРОВАНИЯ**: При реализации функционала бронирования придерживайся архитектуры: BookingManager (основная логика) + booking_handlers (callback обработчики) + database/bookings (работа с БД). Все бронирования сохраняются в таблицу bookings, уведомления отправляются в рестораны по booking_contact из таблицы restaurants.
+12. **🗄️ СИНХРОНИЗАЦИЯ БАЗ ДАННЫХ**: При любых изменениях в структуре продакшн базы `booktable` (новые таблицы, поля, индексы, триггеры) ОБЯЗАТЕЛЬНО применяй такие же изменения к тестовой базе `booktable_test`. Для этого:
+    - Обновляй `init_db.sql` если нужно
+    - Обновляй `scripts/create_test_db.sh` с новыми тестовыми данными  
+    - Пересоздавай тестовую БД: `sudo scripts/create_test_db.sh`
+    - НИКОГДА не тестируй на продакшн базе - только на `booktable_test`
 
 ---
 
@@ -58,9 +64,9 @@ If user says "push to Git" or "restart bot", always respond:
 
 ## 📄 Additional Instructions
 
-You must also read and follow `instructions_for_ai.txt`, which contains essential project information and expectations. Do not skip it.
+You must also read and follow `docs/instructions_for_ai.txt`, which contains essential project information and expectations. Do not skip it.
 
-If you lose context or restart, re-read both this file and `instructions_for_ai.txt`.
+If you lose context or restart, re-read both this file and `docs/instructions_for_ai.txt`.
 
 ---
 
@@ -71,3 +77,4 @@ If you lose context or restart, re-read both this file and `instructions_for_ai.
 - Use scripts only. Respect structure. Confirm startup instructions are followed.
 - Always update tests when adding new functionality.
 - Rewrite legacy tests to match current implementation.
+- Follow established patterns for booking module implementation.

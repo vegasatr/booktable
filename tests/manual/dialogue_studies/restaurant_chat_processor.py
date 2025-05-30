@@ -82,7 +82,7 @@ SAMPLE_RESTAURANTS = [
 async def test_context_processor_relevance():
     """Тестирует релевантность AI-процессора контекста"""
     
-    # Импортируем функцию из проекта
+    # Импортируем функцию из проекта (обновленный путь)
     from src.bot.ai.core import get_relevant_restaurant_data
     
     test_cases = [

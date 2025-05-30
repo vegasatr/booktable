@@ -21,6 +21,12 @@ from src.bot.ai.translation import translate_message, detect_language, translate
 from src.bot.constants import PHUKET_AREAS
 from src.bot.utils.geo import get_nearest_area
 from src.bot.managers.restaurant_display import show_restaurants
+from src.bot.handlers.booking_handlers import (
+    book_restaurant_callback, book_restaurant_select_callback,
+    book_time_callback, book_guests_callback, book_date_callback,
+    handle_custom_time_input, handle_custom_date_input, handle_booking_preferences
+)
+from src.bot.managers.booking_manager import BookingManager
 
 # Настройка логирования
 logging.basicConfig(
@@ -241,7 +247,24 @@ async def talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Основной обработчик текстовых сообщений"""
     user = update.effective_user
     text = update.message.text.strip()
+    language = context.user_data.get('language', 'en')
     
+    logger.info(f"[TALK] User {user.id} sent message: {text}")
+    
+    # Проверяем на ввод кастомного времени/даты для бронирования
+    if await handle_custom_time_input(update, context):
+        return
+    if await handle_custom_date_input(update, context):
+        return
+    if await handle_booking_preferences(update, context):
+        return
+    
+    # Проверяем на намерение бронирования в сообщении
+    booking_intent = await _detect_booking_intent(text, language)
+    if booking_intent:
+        await BookingManager.start_booking_from_chat(update, context, text)
+        return
+
     # Проверяем состояние пользователя
     state = UserState(context)
     
@@ -532,12 +555,9 @@ async def show_other_price_callback(update: Update, context: ContextTypes.DEFAUL
         await update.effective_chat.send_message(f"Ошибка поиска ресторанов: {e}")
 
 async def book_restaurant_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обработчик кнопки бронирования ресторана"""
-    query = update.callback_query
-    await query.answer()
-    await query.message.delete()
-    # TODO: Реализовать логику бронирования
-    await update.effective_chat.send_message("Функция бронирования будет доступна в следующем обновлении.")
+    """Обработчик кнопки бронирования ресторана - теперь использует BookingManager"""
+    from src.bot.handlers.booking_handlers import book_restaurant_callback as new_handler
+    await new_handler(update, context)
 
 async def change_budget_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обработчик кнопки изменения бюджета"""
@@ -570,6 +590,25 @@ async def check_budget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     
     await update.message.reply_text(message)
 
+async def _detect_booking_intent(text, language):
+    """Определяет намерение бронирования в сообщении пользователя"""
+    try:
+        # Ключевые слова для бронирования
+        booking_keywords = {
+            'en': ['book', 'reserve', 'reservation', 'table', 'booking'],
+            'ru': ['забронировать', 'резерв', 'бронь', 'столик', 'бронирование']
+        }
+        
+        text_lower = text.lower()
+        keywords = booking_keywords.get(language, booking_keywords['en'])
+        
+        # Простая проверка по ключевым словам
+        return any(keyword in text_lower for keyword in keywords)
+        
+    except Exception as e:
+        logger.error(f"[BOOKING] Error detecting booking intent: {e}")
+        return False
+
 def main():
     """Основная функция запуска бота"""
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
@@ -589,6 +628,10 @@ def main():
     app.add_handler(CallbackQueryHandler(choose_area_callback, pattern="^choose_area$"))
     app.add_handler(CallbackQueryHandler(show_other_price_callback, pattern="^show_other_price$"))
     app.add_handler(CallbackQueryHandler(book_restaurant_callback, pattern="^book_restaurant$"))
+    app.add_handler(CallbackQueryHandler(book_restaurant_select_callback, pattern="^book_restaurant_\\d+$"))
+    app.add_handler(CallbackQueryHandler(book_time_callback, pattern="^book_time_"))
+    app.add_handler(CallbackQueryHandler(book_guests_callback, pattern="^book_guests_\\d+$"))
+    app.add_handler(CallbackQueryHandler(book_date_callback, pattern="^book_date_"))
     app.add_handler(CallbackQueryHandler(change_budget_callback, pattern="^change_budget$"))
     
     # Обработчики сообщений

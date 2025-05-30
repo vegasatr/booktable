@@ -45,5 +45,8 @@
     "booking_tomorrow": "TOMORROW",
     "booking_other_date": "OTHER",
     "booking_other_time": "OTHER",
+    "booking_time_invalid": "Invalid time format. Please try again (example: 19:30)",
+    "booking_date_invalid": "Invalid date format. Please try again (example: 25.12.2024)",
+    "booking_preferences_saved": "Your preferences have been saved and forwarded to the restaurant.",
     "support_message": "I'm here — how can I help you?"
 } 
