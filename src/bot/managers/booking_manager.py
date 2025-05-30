@@ -116,6 +116,11 @@ class BookingManager:
         """Спрашивает какой ресторан бронировать"""
         language = context.user_data.get('language', 'en')
         
+        # Эффект печатной машинки
+        chat_id = update.effective_chat.id
+        await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+        await asyncio.sleep(1)
+        
         question = await translate_message('booking_which_restaurant', language)
         
         # Формируем список ресторанов
@@ -141,6 +146,11 @@ class BookingManager:
     async def _ask_for_time(update, context, restaurant):
         """Спрашивает время бронирования"""
         language = context.user_data.get('language', 'en')
+        
+        # Эффект печатной машинки
+        chat_id = update.effective_chat.id
+        await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+        await asyncio.sleep(1)
         
         # Получаем время работы ресторана
         restaurant_data = await get_restaurant_working_hours(restaurant['name'])
@@ -216,6 +226,11 @@ class BookingManager:
         """Спрашивает кастомное время с учетом времени работы ресторана"""
         language = context.user_data.get('language', 'en')
         
+        # Эффект печатной машинки
+        chat_id = update.effective_chat.id
+        await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+        await asyncio.sleep(1)
+        
         # Получаем время работы ресторана
         restaurant_data = await get_restaurant_working_hours(restaurant['name'])
         closing_time = "11 PM"  # По умолчанию
@@ -240,6 +255,11 @@ class BookingManager:
     async def _ask_for_guests(update, context):
         """Спрашивает количество гостей"""
         language = context.user_data.get('language', 'en')
+        
+        # Эффект печатной машинки
+        chat_id = update.effective_chat.id
+        await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+        await asyncio.sleep(1)
         
         question = await translate_message('booking_guests_question', language)
         
@@ -268,6 +288,11 @@ class BookingManager:
         """Спрашивает дату бронирования"""
         language = context.user_data.get('language', 'en')
         restaurant = context.user_data['booking_data']['restaurant']
+        
+        # Эффект печатной машинки
+        chat_id = update.effective_chat.id
+        await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+        await asyncio.sleep(1)
         
         # Получаем время работы ресторана
         restaurant_data = await get_restaurant_working_hours(restaurant['name'])
@@ -318,6 +343,11 @@ class BookingManager:
         """Спрашивает кастомную дату"""
         language = context.user_data.get('language', 'en')
         
+        # Эффект печатной машинки
+        chat_id = update.effective_chat.id
+        await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+        await asyncio.sleep(1)
+        
         question = await translate_message('booking_custom_date', language)
         
         if hasattr(update, 'callback_query') and update.callback_query:
@@ -332,6 +362,11 @@ class BookingManager:
     async def _ask_for_custom_guests(update, context):
         """Спрашивает кастомное количество гостей"""
         language = context.user_data.get('language', 'en')
+        
+        # Эффект печатной машинки
+        chat_id = update.effective_chat.id
+        await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+        await asyncio.sleep(1)
         
         question = await translate_message('booking_custom_guests', language)
         
@@ -386,11 +421,20 @@ class BookingManager:
         # Сохраняем номер бронирования для последующих дополнений
         context.user_data['current_booking_number'] = booking_number
         
+        # Эффект печатной машинки перед подтверждением
+        chat_id = update.effective_chat.id
+        await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+        await asyncio.sleep(1)
+        
         # Отправляем подтверждение пользователю
         confirmation = await translate_message('booking_confirmation', language, booking_number=booking_number)
-        instructions = await translate_message('booking_instructions', language)
-        
         await update.effective_chat.send_message(confirmation)
+        
+        # Эффект печатной машинки перед инструкциями
+        await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+        await asyncio.sleep(1)
+        
+        instructions = await translate_message('booking_instructions', language)
         await update.effective_chat.send_message(instructions)
         
         # Отправляем уведомление в ресторан

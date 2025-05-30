@@ -42,6 +42,7 @@ class TestBookingGuestsFix:
         update = MagicMock()
         update.message.text = "1500"
         update.message.reply_text = AsyncMock()
+        update.message.chat_id = 123456
         
         context = MagicMock()
         context.user_data = {
@@ -50,6 +51,7 @@ class TestBookingGuestsFix:
             },
             'language': 'en'
         }
+        context.bot.send_chat_action = AsyncMock()
         
         result = await handle_custom_guests_input(update, context)
         
@@ -65,6 +67,7 @@ class TestBookingGuestsFix:
         update = MagicMock()
         update.message.text = "0"
         update.message.reply_text = AsyncMock()
+        update.message.chat_id = 123456
         
         context = MagicMock()
         context.user_data = {
@@ -73,6 +76,7 @@ class TestBookingGuestsFix:
             },
             'language': 'en'
         }
+        context.bot.send_chat_action = AsyncMock()
         
         result = await handle_custom_guests_input(update, context)
         
@@ -116,29 +120,32 @@ class TestBookingGuestsFix:
         # Создаем мок объекты
         update = MagicMock()
         update.callback_query.edit_message_text = AsyncMock()
+        update.effective_chat.id = 123456
         
         context = MagicMock()
         context.user_data = {
             'language': 'en',
             'booking_data': {}
         }
+        context.bot.send_chat_action = AsyncMock()
         
         with patch('src.bot.managers.booking_manager.translate_message', new_callable=AsyncMock) as mock_translate:
-            mock_translate.return_value = "Пожалуйста, укажите количество гостей:"
-            
-            await BookingManager._ask_for_custom_guests(update, context)
-            
-            # Проверяем что вызвана функция с клавиатурой
-            update.callback_query.edit_message_text.assert_called_once()
-            call_args = update.callback_query.edit_message_text.call_args
-            
-            # Проверяем что передана клавиатура
-            assert 'reply_markup' in call_args[1]
-            keyboard = call_args[1]['reply_markup']
-            
-            # Проверяем что кнопка Меню есть
-            assert len(keyboard.inline_keyboard) == 1
-            assert len(keyboard.inline_keyboard[0]) == 1
-            menu_button = keyboard.inline_keyboard[0][0]
-            assert "МЕНЮ" in menu_button.text
-            assert menu_button.callback_data == "main_menu" 
+            with patch('asyncio.sleep', new_callable=AsyncMock):
+                mock_translate.return_value = "Пожалуйста, укажите количество гостей:"
+                
+                await BookingManager._ask_for_custom_guests(update, context)
+                
+                # Проверяем что вызвана функция с клавиатурой
+                update.callback_query.edit_message_text.assert_called_once()
+                call_args = update.callback_query.edit_message_text.call_args
+                
+                # Проверяем что передана клавиатура
+                assert 'reply_markup' in call_args[1]
+                keyboard = call_args[1]['reply_markup']
+                
+                # Проверяем что кнопка Меню есть
+                assert len(keyboard.inline_keyboard) == 1
+                assert len(keyboard.inline_keyboard[0]) == 1
+                menu_button = keyboard.inline_keyboard[0][0]
+                assert "МЕНЮ" in menu_button.text
+                assert menu_button.callback_data == "main_menu" 

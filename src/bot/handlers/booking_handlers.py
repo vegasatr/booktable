@@ -2,8 +2,10 @@
 Обработчики callback'ов для процесса бронирования
 """
 import logging
+import asyncio
 from datetime import datetime, date, time as datetime_time, timedelta
 from telegram import Update
+from telegram.constants import ChatAction
 from telegram.ext import ContextTypes
 
 from ..managers.booking_manager import BookingManager
@@ -20,6 +22,11 @@ async def book_restaurant_callback(update: Update, context: ContextTypes.DEFAULT
         await BookingManager.start_booking_from_button(update, context)
     except Exception as e:
         logger.error(f"[BOOKING] Error in book_restaurant_callback: {e}")
+        
+        # Эффект печатной машинки перед ошибкой
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+        await asyncio.sleep(1)
+        
         await update.effective_chat.send_message("Произошла ошибка при начале бронирования. Попробуйте позже.")
 
 async def book_restaurant_select_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -153,13 +160,22 @@ async def handle_custom_time_input(update, context):
         
         # Если не удалось распарсить
         error_msg = await translate_message('booking_time_invalid', language)
+        
+        # Эффект печатной машинки перед сообщением об ошибке
+        await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.TYPING)
+        await asyncio.sleep(1)
+        
         await update.message.reply_text(error_msg or "Неверный формат времени. Попробуйте еще раз (например: 19:30)")
         return True
         
     except Exception as e:
         logger.error(f"[BOOKING] Error parsing custom time: {e}")
+        
+        # Эффект печатной машинки перед сообщением об ошибке
+        await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.TYPING)
+        await asyncio.sleep(1)
+        
         await update.message.reply_text("Произошла ошибка. Попробуйте еще раз.")
-        return True
 
 async def handle_custom_date_input(update, context):
     """Обработчик ввода кастомной даты"""
@@ -190,11 +206,21 @@ async def handle_custom_date_input(update, context):
         
         # Если не удалось распарсить
         error_msg = await translate_message('booking_date_invalid', language)
+        
+        # Эффект печатной машинки перед сообщением об ошибке
+        await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.TYPING)
+        await asyncio.sleep(1)
+        
         await update.message.reply_text(error_msg or "Неверный формат даты. Попробуйте еще раз (например: 25.12.2024)")
         return True
         
     except Exception as e:
         logger.error(f"[BOOKING] Error parsing custom date: {e}")
+        
+        # Эффект печатной машинки перед сообщением об ошибке
+        await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.TYPING)
+        await asyncio.sleep(1)
+        
         await update.message.reply_text("Произошла ошибка. Попробуйте еще раз.")
         return True
 
@@ -218,9 +244,17 @@ async def handle_custom_guests_input(update, context):
                 await BookingManager._ask_for_date(update, context)
                 return True
             elif guests_count > 999:
+                # Эффект печатной машинки перед сообщением об ошибке
+                await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.TYPING)
+                await asyncio.sleep(1)
+                
                 await update.message.reply_text("Максимальное количество гостей: 999. Попробуйте еще раз.")
                 return True
             else:
+                # Эффект печатной машинки перед сообщением об ошибке
+                await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.TYPING)
+                await asyncio.sleep(1)
+                
                 await update.message.reply_text("Минимальное количество гостей: 1. Попробуйте еще раз.")
                 return True
         except ValueError:
@@ -241,6 +275,10 @@ async def handle_custom_guests_input(update, context):
                         await BookingManager._ask_for_date(update, context)
                         return True
                     elif guests_count > 999:
+                        # Эффект печатной машинки перед сообщением об ошибке
+                        await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.TYPING)
+                        await asyncio.sleep(1)
+                        
                         await update.message.reply_text("Максимальное количество гостей: 999. Попробуйте еще раз.")
                         return True
                         
@@ -248,11 +286,20 @@ async def handle_custom_guests_input(update, context):
                     pass
         
         # Если не удалось распарсить
+        # Эффект печатной машинки перед сообщением об ошибке
+        await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.TYPING)
+        await asyncio.sleep(1)
+        
         await update.message.reply_text("Пожалуйста, укажите количество гостей числом")
         return True
         
     except Exception as e:
         logger.error(f"[BOOKING] Error parsing custom guests: {e}")
+        
+        # Эффект печатной машинки перед сообщением об ошибке
+        await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.TYPING)
+        await asyncio.sleep(1)
+        
         await update.message.reply_text("Произошла ошибка. Попробуйте еще раз.")
         return True
 
@@ -274,6 +321,11 @@ async def handle_booking_preferences(update, context):
         if success:
             language = context.user_data.get('language', 'en')
             confirmation_msg = await translate_message('booking_preferences_saved', language)
+            
+            # Эффект печатной машинки перед подтверждением
+            await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.TYPING)
+            await asyncio.sleep(1)
+            
             await update.message.reply_text(confirmation_msg or "Ваши пожелания сохранены и переданы в ресторан.")
             
             # TODO: Отправить дополнительное сообщение в ресторан
@@ -283,11 +335,20 @@ async def handle_booking_preferences(update, context):
             # Очищаем номер бронирования
             context.user_data['current_booking_number'] = None
         else:
+            # Эффект печатной машинки перед сообщением об ошибке
+            await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.TYPING)
+            await asyncio.sleep(1)
+            
             await update.message.reply_text("Ошибка при сохранении пожеланий. Попробуйте еще раз.")
         
         return True
         
     except Exception as e:
         logger.error(f"[BOOKING] Error handling booking preferences: {e}")
+        
+        # Эффект печатной машинки перед сообщением об ошибке
+        await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.TYPING)
+        await asyncio.sleep(1)
+        
         await update.message.reply_text("Произошла ошибка. Попробуйте еще раз.")
-        return True 
+        return True
