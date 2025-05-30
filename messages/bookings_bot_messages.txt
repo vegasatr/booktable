@@ -1,0 +1,15 @@
+{
+    "welcome_choose_language": "🍽️ Welcome to BookTable Bookings Bot!\n\nPlease choose your language / Пожалуйста, выберите язык:",
+    "welcome_authorized": "🎉 Welcome to BookTable Bookings Bot!\n\n👤 You are authorized as a manager for restaurants:\n{restaurants}\n\n📋 This bot will automatically send you notifications about new bookings.\n\n✅ Authorization successful!\n🔔 You will now receive all new orders.",
+    "access_denied": "❌ Access Denied\n\nYou are not authorized to use this bot.\n\nTo get access, your @{username} must be specified in the restaurant contacts in the BookTable system.\n\nContact the system administrator.",
+    "please_start": "❌ Please use /start command first for authorization",
+    "choose_action": "Choose an action:",
+    "recent_bookings_title": "📋 Recent Bookings:",
+    "no_bookings": "📋 No bookings found for your restaurants yet",
+    "booking_item": "🔢 Booking #{booking_number}\n🍽️ {restaurant}\n👤 {client_name}\n📅 {date} at {time}\n👥 {guests} guests\n📊 Status: {status}",
+    "booking_item_with_prefs": "🔢 Booking #{booking_number}\n🍽️ {restaurant}\n👤 {client_name}\n📅 {date} at {time}\n👥 {guests} guests\n📊 Status: {status}\n💬 {preferences}",
+    "new_booking_notification": "🆕 NEW BOOKING from BookTable\n\n🔢 Booking number: {booking_number}\n👤 Name: {client_name}\n📅 Date: {date}\n⏰ Time: {time}\n👥 Guests: {guests}\n📱 Messenger: Telegram\n📞 Contact: @{username}\n\n✅ Booking awaiting confirmation",
+    "button_show_orders": "📋 Show Recent Orders",
+    "error_occurred": "Error occurred. Please try again.",
+    "not_authorized": "❌ You are not authorized"
+} 

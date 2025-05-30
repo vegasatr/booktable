@@ -81,13 +81,19 @@ async def book_guests_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.answer()
     
     try:
-        # Извлекаем количество гостей из callback_data
-        guests_count = int(query.data.split('_')[-1])
+        callback_data = query.data
         
-        context.user_data['booking_data']['guests'] = guests_count
-        context.user_data['booking_data']['step'] = 'date_selection'
-        
-        await BookingManager._ask_for_date(update, context)
+        if callback_data == "book_guests_more":
+            # Пользователь выбрал "БОЛЬШЕ" - запрашиваем кастомное количество
+            await BookingManager._ask_for_custom_guests(update, context)
+        else:
+            # Пользователь выбрал конкретное количество гостей
+            guests_count = int(callback_data.split('_')[-1])
+            
+            context.user_data['booking_data']['guests'] = guests_count
+            context.user_data['booking_data']['step'] = 'date_selection'
+            
+            await BookingManager._ask_for_date(update, context)
         
     except Exception as e:
         logger.error(f"[BOOKING] Error in guests selection: {e}")
@@ -189,6 +195,44 @@ async def handle_custom_date_input(update, context):
         
     except Exception as e:
         logger.error(f"[BOOKING] Error parsing custom date: {e}")
+        await update.message.reply_text("Произошла ошибка. Попробуйте еще раз.")
+        return True
+
+async def handle_custom_guests_input(update, context):
+    """Обработчик ввода кастомного количества гостей"""
+    if context.user_data.get('booking_data', {}).get('step') != 'waiting_custom_guests':
+        return False
+    
+    text = update.message.text.strip()
+    language = context.user_data.get('language', 'en')
+    
+    try:
+        # Пытаемся распарсить количество гостей с помощью AI
+        prompt = f"Parse this number of guests: '{text}'. Return only a number (1-50) or 'INVALID' if cannot parse or number is unreasonable."
+        
+        result = await ai_generate('parse_guests', text=prompt, target_language='en')
+        
+        if result and result.strip() != 'INVALID':
+            try:
+                guests_count = int(result.strip())
+                
+                # Проверяем разумные пределы
+                if 1 <= guests_count <= 50:
+                    context.user_data['booking_data']['guests'] = guests_count
+                    context.user_data['booking_data']['step'] = 'date_selection'
+                    
+                    await BookingManager._ask_for_date(update, context)
+                    return True
+                    
+            except ValueError:
+                pass
+        
+        # Если не удалось распарсить
+        await update.message.reply_text("Пожалуйста, укажите количество гостей числом (например: 8 или восемь)")
+        return True
+        
+    except Exception as e:
+        logger.error(f"[BOOKING] Error parsing custom guests: {e}")
         await update.message.reply_text("Произошла ошибка. Попробуйте еще раз.")
         return True
 

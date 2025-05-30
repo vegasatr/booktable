@@ -24,7 +24,8 @@ from src.bot.managers.restaurant_display import show_restaurants
 from src.bot.handlers.booking_handlers import (
     book_restaurant_callback, book_restaurant_select_callback,
     book_time_callback, book_guests_callback, book_date_callback,
-    handle_custom_time_input, handle_custom_date_input, handle_booking_preferences
+    handle_custom_time_input, handle_custom_date_input, handle_booking_preferences,
+    handle_custom_guests_input
 )
 from src.bot.managers.booking_manager import BookingManager
 
@@ -262,6 +263,8 @@ async def talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if await handle_custom_time_input(update, context):
         return
     if await handle_custom_date_input(update, context):
+        return
+    if await handle_custom_guests_input(update, context):
         return
     if await handle_booking_preferences(update, context):
         return
@@ -514,7 +517,7 @@ async def show_other_price_callback(update: Update, context: ContextTypes.DEFAUL
             """
             SELECT name, average_check, location FROM restaurants
             WHERE LOWER(location) ILIKE %s
-            AND average_check::text != %s AND active ILIKE 'true'
+            AND average_check::text != %s AND active = 'TRUE'
             ORDER BY name
             """,
             (f"%{db_area_name.lower()}%", budget)
@@ -650,7 +653,7 @@ def main():
     app.add_handler(CallbackQueryHandler(book_restaurant_callback, pattern="^book_restaurant$"))
     app.add_handler(CallbackQueryHandler(book_restaurant_select_callback, pattern="^book_restaurant_\\d+$"))
     app.add_handler(CallbackQueryHandler(book_time_callback, pattern="^book_time_"))
-    app.add_handler(CallbackQueryHandler(book_guests_callback, pattern="^book_guests_\\d+$"))
+    app.add_handler(CallbackQueryHandler(book_guests_callback, pattern="^book_guests_"))
     app.add_handler(CallbackQueryHandler(book_date_callback, pattern="^book_date_"))
     app.add_handler(CallbackQueryHandler(change_budget_callback, pattern="^change_budget$"))
     

@@ -162,7 +162,7 @@ async def get_restaurant_working_hours(restaurant_name):
         cur.execute("""
             SELECT working_hours, booking_method, booking_contact
             FROM restaurants 
-            WHERE name = %s AND active = 'true'
+            WHERE name = %s AND active = 'TRUE'
         """, (restaurant_name,))
         
         result = cur.fetchone()

@@ -25,29 +25,37 @@ If you do not say this, the user will know you lost context. Repeat reading thes
 5. Use `scripts/check_db.sh` to test database access.
 6. Always respond to the user in Russian language only.
 7. Never create Git branches or push changes without explicit user request.
-8. Если пользователь пишет "откат", запусти скрипт 'scripts/otkat.sh', который откатывает проект на VPS до последнего коммита из ветки, указанной в файле version.txt.
-9. **ОБЯЗАТЕЛЬНО**: После создания нового функционала обязательно дорабатывай автоматические тесты (unit и integration) для покрытия новой функциональности. Без тестов функционал считается незавершенным.
-10. **LEGACY ТЕСТЫ**: Если старые тесты не подходят под новую реализацию кода (изменилась архитектура, логика, API), то ОБЯЗАТЕЛЬНО переписывай эти тесты под актуальную реализацию. Устаревшие тесты должны быть обновлены, а не игнорироваться.
-11. **МОДУЛЬ БРОНИРОВАНИЯ**: При реализации функционала бронирования придерживайся архитектуры: BookingManager (основная логика) + booking_handlers (callback обработчики) + database/bookings (работа с БД). Все бронирования сохраняются в таблицу bookings, уведомления отправляются в рестораны по booking_contact из таблицы restaurants.
-12. **🗄️ СИНХРОНИЗАЦИЯ БАЗ ДАННЫХ**: При любых изменениях в структуре продакшн базы `booktable` (новые таблицы, поля, индексы, триггеры) ОБЯЗАТЕЛЬНО применяй такие же изменения к тестовой базе `booktable_test`. Для этого:
-    - Обновляй `init_db.sql` если нужно
-    - Обновляй `scripts/create_test_db.sh` с новыми тестовыми данными  
-    - Пересоздавай тестовую БД: `sudo scripts/create_test_db.sh`
-    - НИКОГДА не тестируй на продакшн базе - только на `booktable_test`
-13. **🚫 ЗАПРЕТ РУЧНОГО PUSH**: Ошибки в работе скриптов (git_push.sh, start_bot.sh и др.) НЕ ЯВЛЯЮТСЯ основанием для ручного выполнения git команд в обход скриптов. Ошибки скриптов ЯВЛЯЮТСЯ основанием для:
-    - Анализа и исправления ошибок в скриптах
-    - Отладки проблем в автоматизации
-    - Улучшения надежности скриптов
-    - ТОЛЬКО после исправления скрипта разрешается его использование
-14. **📁 ФАЙЛОВАЯ АРХИТЕКТУРА**: ЗАПРЕЩЕНО создавать файлы в корневой папке проекта кроме исключительных случаев, которые архитектурно требуют этого (например, README.md, .env, package.json). Правила размещения файлов:
-    - Временные файлы → `temp/` (создать папку если не существует)
-    - Документация → `docs/`
-    - Тесты → `tests/unit/` или `tests/integration/`
-    - Скрипты → `scripts/`
-    - Исходный код → `src/`
-    - Логи → `logs/`
-    - Конфигурация БД → `sql/`
-    - ВСЕГДА размещай файлы в правильную папку СРАЗУ при создании, не откладывая
+8. If user writes "откат" (rollback), run script 'scripts/otkat.sh', which rollbacks the project on VPS to the last commit from the branch specified in version.txt file.
+9. **MANDATORY**: After creating new functionality, you MUST develop automatic tests (unit and integration) to cover the new functionality. Functionality without tests is considered incomplete.
+10. **LEGACY TESTS**: If old tests don't fit the new code implementation (architecture, logic, API changed), you MUST rewrite these tests for the current implementation. Outdated tests must be updated, not ignored.
+11. **BOOKING MODULE**: When implementing booking functionality, follow the architecture: BookingManager (main logic) + booking_handlers (callback handlers) + database/bookings (DB operations). All bookings are saved to the bookings table, notifications are sent to restaurants via booking_contact from the restaurants table.
+12. **🗄️ DATABASE SYNCHRONIZATION**: For any changes in production database `booktable` structure (new tables, fields, indexes, triggers) you MUST apply the same changes to test database `booktable_test`. To do this:
+    - Update `init_db.sql` if needed
+    - Update `scripts/create_test_db.sh` with new test data  
+    - Recreate test DB: `sudo scripts/create_test_db.sh`
+    - NEVER test on production database - only on `booktable_test`
+13. **🚫 MANUAL PUSH PROHIBITION**: Errors in script operation (git_push.sh, start_bot.sh etc.) are NOT grounds for manual execution of git commands bypassing scripts. Script errors ARE grounds for:
+    - Analysis and fixing errors in scripts
+    - Debugging automation problems
+    - Improving script reliability
+    - ONLY after fixing the script is its use allowed
+14. **📁 FILE ARCHITECTURE**: FORBIDDEN to create files in project root folder except exceptional cases that architecturally require it (e.g., README.md, .env, package.json). File placement rules:
+    - Temporary files → `temp/` (create folder if doesn't exist)
+    - Documentation → `docs/`
+    - Tests → `tests/unit/` or `tests/integration/`
+    - Scripts → `scripts/`
+    - Source code → `src/`
+    - Logs → `logs/`
+    - DB configuration → `sql/`
+    - ALWAYS place files in the correct folder IMMEDIATELY upon creation, don't postpone
+15. **🔧 DATABASE OPERATIONS**: FORBIDDEN to create new specialized scripts for database operations. Use ONLY the universal tool `scripts/db_tool.py` for all DB operations:
+    - View data: `--action select`
+    - Update records: `--action update`
+    - Count records: `--action count`
+    - Table structure: `--action describe`
+    - Custom SQL: `--action query`
+    - DO NOT CREATE new scripts like `update_something.py`, `check_something.py` etc.
+    - Examples in `scripts/README.md`
 
 ---
 
@@ -97,3 +105,4 @@ If you lose context or restart, re-read both this file and `docs/instructions_fo
 - Rewrite legacy tests to match current implementation.
 - Follow established patterns for booking module implementation.
 - Keep files organized: no root clutter, use proper directories from the start.
+- Use only `scripts/db_tool.py` for all database operations.

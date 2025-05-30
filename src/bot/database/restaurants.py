@@ -24,7 +24,7 @@ async def get_restaurants_by_area(area_key, budget_str):
             SELECT r.*
             FROM restaurants r
             WHERE LOWER(r.location) ILIKE %s
-            AND r.average_check::text = %s AND r.active ILIKE 'true'
+            AND r.average_check::text = %s AND r.active = 'TRUE'
             ORDER BY r.name
         """
         params = (f"%{db_area_name.lower()}%", budget_str)
@@ -57,7 +57,7 @@ async def get_available_budgets_in_area(area_key):
             SELECT DISTINCT average_check::text as budget
             FROM restaurants 
             WHERE LOWER(location) ILIKE %s
-            AND active ILIKE 'true'
+            AND active = 'TRUE'
             ORDER BY average_check::text
         """, (f"%{db_area_name.lower()}%",))
         
@@ -82,7 +82,7 @@ async def get_restaurants_by_location_any(budget_str):
         query = """
             SELECT r.*
             FROM restaurants r
-            WHERE r.average_check::text = %s AND r.active ILIKE 'true'
+            WHERE r.average_check::text = %s AND r.active = 'TRUE'
             ORDER BY r.name
         """
         params = (budget_str,)
