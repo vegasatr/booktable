@@ -56,6 +56,13 @@ If you do not say this, the user will know you lost context. Repeat reading thes
     - Custom SQL: `--action query`
     - DO NOT CREATE new scripts like `update_something.py`, `check_something.py` etc.
     - Examples in `scripts/README.md`
+16. **📋 SCRIPT EXECUTION WITH REAL-TIME LOGGING**: When running important scripts (`git_push.sh`, `start_bot.sh`), ALWAYS run them in background mode with real-time output visible. Use format:
+    - `./scripts/script_name.sh "parameters" &`
+    - This allows monitoring script progress in real-time
+    - User can see bot status, test results, and errors immediately
+    - No need to fight with terminal or wait for completion
+    - If script has detailed logging to files, mention the log file location
+    - NEVER run scripts silently or without showing progress
 
 ---
 

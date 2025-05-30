@@ -1,318 +1,260 @@
 """
-Unit тесты для уведомлений при бронировании
+Unit тесты для уведомлений при бронировании в боте менеджеров
 """
 import pytest
 import asyncio
 from datetime import date, time as datetime_time
-from unittest.mock import Mock, patch, AsyncMock
-
-from src.bot.managers.booking_manager import BookingManager
+from unittest.mock import Mock, patch, AsyncMock, MagicMock
+import psycopg2
 
 class TestBookingNotifications:
-    """Тесты уведомлений ресторанов при бронировании"""
+    """Тесты уведомлений ресторанов при бронировании через бота менеджеров"""
     
     @pytest.mark.asyncio
-    async def test_notify_restaurant_with_equals_prefix(self):
-        """Тест очистки символа = в начале контакта"""
+    async def test_send_notification_success(self):
+        """Тест успешной отправки уведомления через бота менеджеров"""
         
         # Подготовка данных
-        booking_number = 42
+        booking_number = 123
         booking_data = {
             'date': date(2025, 5, 30),
             'time': datetime_time(19, 30),
             'guests': 2
         }
+        restaurant_name = "Test Restaurant"
+        user_data = {
+            'first_name': 'John',
+            'last_name': 'Doe',
+            'username': 'johndoe',
+            'id': 12345
+        }
         
-        user = Mock()
-        user.first_name = "John"
-        user.last_name = "Doe"
-        user.username = "johndoe"
-        user.id = 12345
+        # Мокаем соединение с базой данных
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
         
-        restaurant_contact = "=+79219129292"  # Контакт с символом =
+        # Настраиваем данные ресторана
+        mock_cursor.fetchone.return_value = {"booking_contact": "@test_manager"}
         
-        # Мокаем Bot
-        with patch('src.bot.managers.booking_manager.Bot') as mock_bot_class:
-            mock_bot = Mock()
-            mock_bot.send_message = AsyncMock()
-            mock_bot_class.return_value = mock_bot
+        # Импортируем и вызываем функцию с правильными патчами
+        with patch('psycopg2.connect', return_value=mock_conn):
+            # Импортируем после патча
+            import bt_bookings_bot
             
-            # Вызываем метод
-            await BookingManager._notify_restaurant(
-                booking_number, booking_data, restaurant_contact, user
+            result = await bt_bookings_bot.send_booking_notification(
+                booking_number, booking_data, restaurant_name, user_data
             )
-            
-            # Проверяем что send_message был вызван
-            assert mock_bot.send_message.called
-            
-            # Проверяем аргументы
-            call_args = mock_bot.send_message.call_args
-            chat_id = call_args[1]['chat_id']
-            message = call_args[1]['text']
-            
-            # Символ = должен быть удален
-            assert chat_id == 79219129292
-            assert "#42" in message
-            assert "John Doe" in message
-            assert "19:30" in message
+        
+        # Проверяем успешный результат
+        assert result is True
+        
+        # Проверяем SQL запрос
+        mock_cursor.execute.assert_called_once()
+        call_args = mock_cursor.execute.call_args
+        query = call_args[0][0]
+        params = call_args[0][1]
+        
+        assert "SELECT booking_contact" in query
+        assert "FROM restaurants" in query
+        assert "WHERE name = %s" in query
+        assert params == (restaurant_name,)
     
     @pytest.mark.asyncio
-    async def test_notify_restaurant_with_username(self):
-        """Тест отправки уведомления на username"""
+    async def test_send_notification_no_restaurant_found(self):
+        """Тест когда ресторан не найден"""
         
-        booking_number = 43
+        booking_number = 999
+        booking_data = {'date': date(2025, 5, 30), 'time': datetime_time(19, 30), 'guests': 2}
+        restaurant_name = "Unknown Restaurant"
+        user_data = {'first_name': 'John', 'username': 'johndoe'}
+        
+        # Мокаем соединение с базой данных
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+        
+        # Ресторан не найден
+        mock_cursor.fetchone.return_value = None
+        
+        # Мокаем логгер
+        with patch('psycopg2.connect', return_value=mock_conn):
+            import bt_bookings_bot
+            
+            with patch.object(bt_bookings_bot, 'logger') as mock_logger:
+                result = await bt_bookings_bot.send_booking_notification(
+                    booking_number, booking_data, restaurant_name, user_data
+                )
+        
+        # Проверяем результат
+        assert result is False
+        
+        # Проверяем что была залогирована ошибка
+        mock_logger.warning.assert_called_once()
+        warning_call = mock_logger.warning.call_args[0][0]
+        assert "No booking contact for restaurant" in warning_call
+    
+    @pytest.mark.asyncio
+    async def test_send_notification_no_contact(self):
+        """Тест когда у ресторана нет контакта"""
+        
+        booking_number = 124
+        booking_data = {'date': date(2025, 5, 30), 'time': datetime_time(19, 30), 'guests': 2}
+        restaurant_name = "Test Restaurant"
+        user_data = {'first_name': 'John', 'username': 'johndoe'}
+        
+        # Мокаем соединение с базой данных
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+        
+        # Ресторан без контакта
+        mock_cursor.fetchone.return_value = {"booking_contact": None}
+        
+        # Мокаем логгер
+        with patch('psycopg2.connect', return_value=mock_conn):
+            import bt_bookings_bot
+            
+            with patch.object(bt_bookings_bot, 'logger') as mock_logger:
+                result = await bt_bookings_bot.send_booking_notification(
+                    booking_number, booking_data, restaurant_name, user_data
+                )
+        
+        # Проверяем результат
+        assert result is False
+        
+        # Проверяем что была залогирована ошибка
+        mock_logger.warning.assert_called_once()
+        warning_call = mock_logger.warning.call_args[0][0]
+        assert "No booking contact for restaurant" in warning_call
+    
+    @pytest.mark.asyncio
+    async def test_send_notification_with_username_only(self):
+        """Тест когда у пользователя только username"""
+        
+        booking_number = 125
+        booking_data = {'date': date(2025, 5, 30), 'time': datetime_time(19, 30), 'guests': 2}
+        restaurant_name = "Test Restaurant"
+        user_data = {'username': 'johndoe', 'id': 12345}  # Только username и id
+        
+        # Мокаем соединение с базой данных
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+        
+        # Ресторан с контактом
+        mock_cursor.fetchone.return_value = {"booking_contact": "@manager"}
+        
+        with patch('psycopg2.connect', return_value=mock_conn):
+            import bt_bookings_bot
+            
+            result = await bt_bookings_bot.send_booking_notification(
+                booking_number, booking_data, restaurant_name, user_data
+            )
+        
+        # Проверяем успешный результат
+        assert result is True
+    
+    @pytest.mark.asyncio
+    async def test_send_notification_with_id_only(self):
+        """Тест когда у пользователя только id"""
+        
+        booking_number = 126
+        booking_data = {'date': date(2025, 5, 30), 'time': datetime_time(19, 30), 'guests': 2}
+        restaurant_name = "Test Restaurant"
+        user_data = {'id': 12345}  # Только id
+        
+        # Мокаем соединение с базой данных
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+        
+        # Ресторан с контактом
+        mock_cursor.fetchone.return_value = {"booking_contact": "@manager"}
+        
+        with patch('psycopg2.connect', return_value=mock_conn):
+            import bt_bookings_bot
+            
+            result = await bt_bookings_bot.send_booking_notification(
+                booking_number, booking_data, restaurant_name, user_data
+            )
+        
+        # Проверяем успешный результат
+        assert result is True
+    
+    @pytest.mark.asyncio
+    async def test_send_notification_database_error(self):
+        """Тест обработки ошибки базы данных"""
+        
+        booking_number = 127
+        booking_data = {'date': date(2025, 5, 30), 'time': datetime_time(19, 30), 'guests': 2}
+        restaurant_name = "Test Restaurant"
+        user_data = {'first_name': 'John', 'username': 'johndoe'}
+        
+        # Мокаем ошибку базы данных
+        with patch('psycopg2.connect', side_effect=psycopg2.Error("DB connection failed")):
+            import bt_bookings_bot
+            
+            with patch.object(bt_bookings_bot, 'logger') as mock_logger:
+                result = await bt_bookings_bot.send_booking_notification(
+                    booking_number, booking_data, restaurant_name, user_data
+                )
+        
+        # Проверяем результат
+        assert result is False
+        
+        # Проверяем что была залогирована ошибка
+        mock_logger.error.assert_called_once()
+        error_call = mock_logger.error.call_args[0][0]
+        assert "Error sending booking notification" in error_call
+    
+    @pytest.mark.asyncio
+    async def test_send_notification_message_formatting(self):
+        """Тест правильного форматирования сообщения уведомления"""
+        
+        booking_number = 128
         booking_data = {
             'date': date(2025, 5, 30),
-            'time': datetime_time(20, 0),
+            'time': datetime_time(19, 30),
             'guests': 4
         }
-        
-        user = Mock()
-        user.first_name = "Jane"
-        user.last_name = ""
-        user.username = "jane_user"
-        user.id = 54321
-        
-        restaurant_contact = "=@test_restaurant"  # Username с символом =
-        
-        # Мокаем Bot
-        with patch('src.bot.managers.booking_manager.Bot') as mock_bot_class:
-            mock_bot = Mock()
-            mock_bot.get_chat = AsyncMock()
-            mock_bot.send_message = AsyncMock()
-            mock_bot_class.return_value = mock_bot
-            
-            # Мокаем chat
-            chat = Mock()
-            chat.id = 98765
-            mock_bot.get_chat.return_value = chat
-            
-            # Вызываем метод
-            await BookingManager._notify_restaurant(
-                booking_number, booking_data, restaurant_contact, user
-            )
-            
-            # Проверяем что get_chat был вызван с правильным username
-            mock_bot.get_chat.assert_called_with("test_restaurant")
-            
-            # Проверяем что send_message был вызван с chat.id
-            assert mock_bot.send_message.called
-            call_args = mock_bot.send_message.call_args
-            assert call_args[1]['chat_id'] == 98765
-    
-    @pytest.mark.asyncio 
-    async def test_notify_restaurant_with_group_chat_id(self):
-        """Тест отправки уведомления в группу (отрицательный chat_id)"""
-        
-        booking_number = 44
-        booking_data = {
-            'date': date(2025, 5, 30),
-            'time': datetime_time(18, 0),
-            'guests': 3
+        restaurant_name = "Test Restaurant"
+        user_data = {
+            'first_name': 'John',
+            'last_name': 'Doe',
+            'username': 'johndoe',
+            'id': 12345
         }
         
-        user = Mock()
-        user.first_name = "Bob"
-        user.last_name = "Smith"
-        user.username = "bobsmith"
-        user.id = 67890
+        # Мокаем соединение с базой данных
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
         
-        restaurant_contact = "-1001234567890"  # Group chat ID
+        # Ресторан с контактом
+        mock_cursor.fetchone.return_value = {"booking_contact": "@manager"}
         
-        # Мокаем Bot
-        with patch('src.bot.managers.booking_manager.Bot') as mock_bot_class:
-            mock_bot = Mock()
-            mock_bot.send_message = AsyncMock()
-            mock_bot_class.return_value = mock_bot
+        with patch('psycopg2.connect', return_value=mock_conn):
+            import bt_bookings_bot
             
-            # Вызываем метод
-            await BookingManager._notify_restaurant(
-                booking_number, booking_data, restaurant_contact, user
-            )
-            
-            # Проверяем что send_message был вызван с отрицательным chat_id
-            assert mock_bot.send_message.called
-            call_args = mock_bot.send_message.call_args
-            chat_id = call_args[1]['chat_id']
-            assert chat_id == -1001234567890
-    
-    @pytest.mark.asyncio
-    async def test_notify_restaurant_with_phone_formatted(self):
-        """Тест обработки телефона с пробелами и дефисами"""
-        
-        booking_number = 45
-        booking_data = {
-            'date': date(2025, 5, 30),
-            'time': datetime_time(21, 0),
-            'guests': 1
-        }
-        
-        user = Mock()
-        user.first_name = "Alice"
-        user.last_name = "Johnson"
-        user.username = "alice_j"
-        user.id = 11111
-        
-        restaurant_contact = "+7 921 912-92-92"  # Форматированный номер
-        
-        # Мокаем Bot
-        with patch('src.bot.managers.booking_manager.Bot') as mock_bot_class:
-            mock_bot = Mock()
-            mock_bot.send_message = AsyncMock()
-            mock_bot_class.return_value = mock_bot
-            
-            # Вызываем метод
-            await BookingManager._notify_restaurant(
-                booking_number, booking_data, restaurant_contact, user
-            )
-            
-            # Проверяем что send_message был вызван с очищенными цифрами
-            assert mock_bot.send_message.called
-            call_args = mock_bot.send_message.call_args
-            chat_id = call_args[1]['chat_id']
-            assert chat_id == 79219129292  # Очищенные от пробелов и дефисов
-    
-    @pytest.mark.asyncio
-    async def test_notify_restaurant_with_telegram_link(self):
-        """Тест обработки ссылки t.me"""
-        
-        booking_number = 46
-        booking_data = {
-            'date': date(2025, 5, 30),
-            'time': datetime_time(22, 0),
-            'guests': 5
-        }
-        
-        user = Mock()
-        user.first_name = "Charlie"
-        user.last_name = "Brown"
-        user.username = "charlie_b"
-        user.id = 22222
-        
-        restaurant_contact = "https://t.me/restaurant_owner"
-        
-        # Мокаем Bot
-        with patch('src.bot.managers.booking_manager.Bot') as mock_bot_class:
-            mock_bot = Mock()
-            mock_bot.get_chat = AsyncMock()
-            mock_bot.send_message = AsyncMock()
-            mock_bot_class.return_value = mock_bot
-            
-            # Мокаем chat
-            chat = Mock()
-            chat.id = 33333
-            mock_bot.get_chat.return_value = chat
-            
-            # Вызываем метод
-            await BookingManager._notify_restaurant(
-                booking_number, booking_data, restaurant_contact, user
-            )
-            
-            # Проверяем что get_chat был вызван с извлеченным username
-            mock_bot.get_chat.assert_called_with("restaurant_owner")
-            
-            # Проверяем отправку сообщения
-            assert mock_bot.send_message.called
-            call_args = mock_bot.send_message.call_args
-            assert call_args[1]['chat_id'] == 33333
-    
-    @pytest.mark.asyncio
-    async def test_notify_restaurant_error_handling(self):
-        """Тест обработки ошибок при отправке уведомления"""
-        
-        booking_number = 47
-        booking_data = {
-            'date': date(2025, 5, 30),
-            'time': datetime_time(17, 30),
-            'guests': 2
-        }
-        
-        user = Mock()
-        user.first_name = "David"
-        user.last_name = "Wilson"
-        user.username = "david_w"
-        user.id = 44444
-        
-        restaurant_contact = "@nonexistent_user"
-        
-        # Мокаем Bot с ошибкой
-        with patch('src.bot.managers.booking_manager.Bot') as mock_bot_class:
-            mock_bot = Mock()
-            mock_bot.get_chat = AsyncMock(side_effect=Exception("User not found"))
-            mock_bot_class.return_value = mock_bot
-            
-            # Мокаем logger
-            with patch('src.bot.managers.booking_manager.logger') as mock_logger:
-                
-                # Вызываем метод - не должно падать с исключением
-                await BookingManager._notify_restaurant(
-                    booking_number, booking_data, restaurant_contact, user
+            # Мокаем логгер чтобы увидеть сформированное сообщение
+            with patch.object(bt_bookings_bot, 'logger') as mock_logger:
+                result = await bt_bookings_bot.send_booking_notification(
+                    booking_number, booking_data, restaurant_name, user_data
                 )
-                
-                # Проверяем что ошибка была залогирована
-                assert mock_logger.warning.called
-                assert mock_logger.info.called
-    
-    @pytest.mark.asyncio
-    async def test_notify_restaurant_no_contact(self):
-        """Тест обработки случая без контакта ресторана"""
         
-        booking_number = 48
-        booking_data = {
-            'date': date(2025, 5, 30),
-            'time': datetime_time(16, 0),
-            'guests': 6
-        }
+        # Проверяем успешный результат
+        assert result is True
         
-        user = Mock()
-        user.first_name = "Eva"
-        user.last_name = "Garcia"
-        user.username = "eva_g"
-        user.id = 55555
+        # Проверяем что сообщение содержит нужные данные
+        info_calls = [call for call in mock_logger.info.call_args_list]
+        message_logged = False
+        for call in info_calls:
+            if "Booking notification prepared" in call[0][0]:
+                message_logged = True
+                message = call[0][0]
+                assert "Booking number: 128" in message
+                assert "Test Restaurant" in message
+                break
         
-        restaurant_contact = ""  # Пустой контакт
-        
-        # Мокаем logger
-        with patch('src.bot.managers.booking_manager.logger') as mock_logger:
-            
-            # Вызываем метод
-            await BookingManager._notify_restaurant(
-                booking_number, booking_data, restaurant_contact, user
-            )
-            
-            # Проверяем что была залогирована проблема с отсутствием контакта
-            assert mock_logger.warning.called
-            warning_call = mock_logger.warning.call_args[0][0]
-            assert "No restaurant contact" in warning_call
-    
-    @pytest.mark.asyncio
-    async def test_notify_restaurant_unknown_format(self):
-        """Тест обработки неизвестного формата контакта"""
-        
-        booking_number = 49
-        booking_data = {
-            'date': date(2025, 5, 30),
-            'time': datetime_time(15, 0),
-            'guests': 3
-        }
-        
-        user = Mock()
-        user.first_name = "Frank"
-        user.last_name = "Miller"
-        user.username = "frank_m"
-        user.id = 66666
-        
-        restaurant_contact = "unknown_format_contact"  # Неизвестный формат
-        
-        # Мокаем logger
-        with patch('src.bot.managers.booking_manager.logger') as mock_logger:
-            
-            # Вызываем метод
-            await BookingManager._notify_restaurant(
-                booking_number, booking_data, restaurant_contact, user
-            )
-            
-            # Проверяем что была залогирована проблема с неизвестным форматом
-            assert mock_logger.warning.called
-            warning_call = mock_logger.warning.call_args[0][0]
-            assert "Unknown contact format" in warning_call 
+        assert message_logged, "Booking notification message should be logged" 

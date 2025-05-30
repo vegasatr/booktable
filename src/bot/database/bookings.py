@@ -30,6 +30,8 @@ async def save_booking_to_db(restaurant_name, client_name, phone, date_booking, 
     Returns:
         int: booking_number при успехе, None при ошибке
     """
+    conn = None
+    cur = None
     try:
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=DictCursor)
@@ -63,7 +65,8 @@ async def save_booking_to_db(restaurant_name, client_name, phone, date_booking, 
         logger.error(f"[BOOKINGS] Error saving booking: {e}")
         if conn:
             conn.rollback()
-            cur.close()
+            if cur:
+                cur.close()
             conn.close()
         return None
 
@@ -108,6 +111,8 @@ async def update_booking_preferences(booking_number, additional_preferences):
     Returns:
         bool: True при успехе, False при ошибке
     """
+    conn = None
+    cur = None
     try:
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=DictCursor)
@@ -141,7 +146,8 @@ async def update_booking_preferences(booking_number, additional_preferences):
         logger.error(f"[BOOKINGS] Error updating booking preferences: {e}")
         if conn:
             conn.rollback()
-            cur.close()
+            if cur:
+                cur.close()
             conn.close()
         return False
 

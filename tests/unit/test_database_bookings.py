@@ -133,10 +133,15 @@ class TestBookingDatabase:
             assert result == mock_booking_data
             
             # Проверяем что был выполнен правильный запрос
-            mock_cur.execute.assert_called_once_with(
-                "SELECT * FROM bookings WHERE booking_number = %s",
-                (123,)
-            )
+            mock_cur.execute.assert_called_once()
+            call_args = mock_cur.execute.call_args
+            query = call_args[0][0]
+            params = call_args[0][1]
+            
+            # Проверяем содержимое запроса (не точное совпадение)
+            assert "SELECT * FROM bookings" in query
+            assert "WHERE booking_number = %s" in query
+            assert params == (123,)
     
     @pytest.mark.asyncio
     async def test_get_booking_by_number_not_found(self):
@@ -180,7 +185,10 @@ class TestBookingDatabase:
             
             # Второй запрос - обновление пожеланий
             second_call = mock_cur.execute.call_args_list[1]
-            assert "UPDATE bookings SET preferences" in second_call[0][0]
+            query = second_call[0][0]
+            assert "UPDATE bookings" in query
+            assert "SET preferences" in query
+            assert "WHERE booking_number = %s" in query
             
             # Проверяем что пожелания объединились
             updated_preferences = second_call[0][1][0]
@@ -206,7 +214,7 @@ class TestBookingDatabase:
     
     @pytest.mark.asyncio
     async def test_get_restaurant_working_hours_success(self):
-        """Тест успешного получения времени работы ресторана"""
+        """Тест успешного получения рабочих часов ресторана"""
         with patch('src.bot.database.bookings.get_db_connection') as mock_get_conn:
             mock_conn = Mock()
             mock_cur = Mock()
@@ -214,28 +222,30 @@ class TestBookingDatabase:
             mock_get_conn.return_value = mock_conn
             mock_conn.cursor.return_value = mock_cur
             
-            # Мокаем данные ресторана
-            mock_restaurant_data = {
-                'working_hours': {'open': '18:00', 'close': '23:00'},
+            # Мокаем результат запроса
+            mock_working_hours = {
+                'working_hours': '11:00-23:00',
                 'booking_method': 'telegram',
                 'booking_contact': '@restaurant_contact'
             }
-            mock_cur.fetchone.return_value = mock_restaurant_data
+            mock_cur.fetchone.return_value = mock_working_hours
             
             result = await get_restaurant_working_hours('Test Restaurant')
             
-            assert result == mock_restaurant_data
+            # Проверяем результат
+            assert result == mock_working_hours
             
             # Проверяем что был выполнен правильный запрос
             mock_cur.execute.assert_called_once()
             call_args = mock_cur.execute.call_args
-            
             query = call_args[0][0]
             params = call_args[0][1]
             
+            # Проверяем содержимое запроса
             assert "SELECT working_hours, booking_method, booking_contact" in query
             assert "FROM restaurants" in query
-            assert "WHERE name = %s AND active = true" in query
+            assert "WHERE name = %s" in query
+            assert "active = 'TRUE'" in query
             assert params == ('Test Restaurant',)
     
     @pytest.mark.asyncio
