@@ -5,7 +5,7 @@
 import logging
 import asyncio
 from datetime import datetime, date, time as datetime_time, timedelta
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Bot
 from telegram.constants import ChatAction
 from telegram.ext import ContextTypes
 
@@ -15,6 +15,7 @@ from ..database.bookings import (
     save_booking_to_db, update_booking_preferences, 
     get_restaurant_working_hours
 )
+from ..config import TELEGRAM_TOKEN
 
 logger = logging.getLogger(__name__)
 
@@ -309,22 +310,103 @@ class BookingManager:
             if not client_name:
                 client_name = user.username or f"User_{user.id}"
             
-            message = f"""Новое бронирование от BookTable
-Номер брони: {booking_number}
-Имя: {client_name}
-Дата: {booking_data['date'].strftime('%d.%m.%Y')}
-Время: {booking_data['time'].strftime('%H:%M')}
-Гостей: {booking_data['guests']}
-Мессенджер: Telegram
-Контакт: @{user.username or user.id}
-Если будут особые пожелания, я напишу позже"""
+            message = f"""🍽️ НОВОЕ БРОНИРОВАНИЕ - BookTable
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📋 Номер брони: #{booking_number}
+👤 Клиент: {client_name}
+📅 Дата: {booking_data['date'].strftime('%d.%m.%Y')}
+🕐 Время: {booking_data['time'].strftime('%H:%M')}
+👥 Гостей: {booking_data['guests']}
+📱 Контакт: @{user.username or user.id}
+
+Если у клиента будут особые пожелания к столику или блюдам, я передам их дополнительно.
+
+С уважением, BookTable Bot 🤖"""
             
-            # TODO: Реализовать отправку сообщения в ресторан
-            # Пока просто логируем
-            logger.info(f"[BOOKING] Notification to restaurant {restaurant_contact}: {message}")
+            # Очищаем контакт от лишних символов (= в начале)
+            clean_contact = restaurant_contact.strip()
+            if clean_contact.startswith('='):
+                clean_contact = clean_contact[1:]
+            
+            # Отправляем уведомление в ресторан
+            if clean_contact:
+                bot = Bot(token=TELEGRAM_TOKEN)
+                
+                # Определяем тип контакта и отправляем сообщение
+                if clean_contact.startswith('@'):
+                    # Telegram username - отправляем в личные сообщения
+                    username = clean_contact[1:]  # убираем @
+                    try:
+                        # Сначала пытаемся найти пользователя
+                        chat = await bot.get_chat(username)
+                        await bot.send_message(chat_id=chat.id, text=message)
+                        logger.info(f"[BOOKING] Notification sent to @{username} for booking #{booking_number}")
+                    except Exception as username_error:
+                        logger.warning(f"[BOOKING] Failed to send to @{username}: {username_error}")
+                        # Логируем для ручной отправки
+                        logger.info(f"[BOOKING] Manual notification needed to @{username}: {message}")
+                        
+                elif clean_contact.startswith('https://t.me/'):
+                    # Telegram link - извлекаем username
+                    username = clean_contact.split('/')[-1]
+                    if username.startswith('+'):
+                        # Это номер телефона, не username
+                        logger.warning(f"[BOOKING] Phone number link not supported: {clean_contact}")
+                        logger.info(f"[BOOKING] Manual notification needed to {clean_contact}: {message}")
+                    else:
+                        try:
+                            chat = await bot.get_chat(username)
+                            await bot.send_message(chat_id=chat.id, text=message)
+                            logger.info(f"[BOOKING] Notification sent to {username} for booking #{booking_number}")
+                        except Exception as link_error:
+                            logger.warning(f"[BOOKING] Failed to send to {username}: {link_error}")
+                            logger.info(f"[BOOKING] Manual notification needed to {clean_contact}: {message}")
+                            
+                elif clean_contact.isdigit() or (clean_contact.startswith('-') and clean_contact[1:].isdigit()):
+                    # Telegram chat ID (может быть отрицательным для групп)
+                    try:
+                        await bot.send_message(chat_id=int(clean_contact), text=message)
+                        logger.info(f"[BOOKING] Notification sent to chat_id {clean_contact} for booking #{booking_number}")
+                    except Exception as chat_error:
+                        logger.warning(f"[BOOKING] Failed to send to chat_id {clean_contact}: {chat_error}")
+                        logger.info(f"[BOOKING] Manual notification needed to {clean_contact}: {message}")
+                        
+                elif clean_contact.startswith('+') and clean_contact[1:].replace(' ', '').replace('-', '').replace('(', '').replace(')', '').isdigit():
+                    # Номер телефона - пытаемся отправить как есть (возможно это зарегистрированный Telegram ID)
+                    phone_digits = clean_contact[1:].replace(' ', '').replace('-', '').replace('(', '').replace(')', '')
+                    try:
+                        # Пытаемся отправить на номер телефона как chat_id
+                        await bot.send_message(chat_id=int(phone_digits), text=message)
+                        logger.info(f"[BOOKING] Notification sent to phone-based chat_id {phone_digits} for booking #{booking_number}")
+                    except Exception as phone_error:
+                        logger.warning(f"[BOOKING] Failed to send to phone {clean_contact}: {phone_error}")
+                        logger.info(f"[BOOKING] Manual notification needed - phone number may not be registered in Telegram: {clean_contact}")
+                        logger.info(f"[BOOKING] Message to send manually: {message}")
+                        
+                elif clean_contact.replace(' ', '').replace('-', '').replace('(', '').replace(')', '').isdigit():
+                    # Просто цифры без + (возможно телефон без +, возможно ID)
+                    clean_digits = clean_contact.replace(' ', '').replace('-', '').replace('(', '').replace(')', '')
+                    try:
+                        # Пытаемся отправить как chat_id
+                        await bot.send_message(chat_id=int(clean_digits), text=message)
+                        logger.info(f"[BOOKING] Notification sent to chat_id/phone {clean_digits} for booking #{booking_number}")
+                    except Exception as digits_error:
+                        logger.warning(f"[BOOKING] Failed to send to {clean_contact}: {digits_error}")
+                        logger.info(f"[BOOKING] Manual notification needed to {clean_contact}: {message}")
+                        
+                else:
+                    # Неизвестный формат контакта
+                    logger.warning(f"[BOOKING] Unknown contact format: {clean_contact}")
+                    logger.info(f"[BOOKING] Manual notification needed to {clean_contact}: {message}")
+            else:
+                # Нет контакта ресторана
+                logger.warning(f"[BOOKING] No restaurant contact for booking #{booking_number}")
+                logger.info(f"[BOOKING] Manual notification needed (no contact): {message}")
             
         except Exception as e:
             logger.error(f"[BOOKING] Error notifying restaurant: {e}")
+            # В случае ошибки все равно логируем сообщение для ручной отправки
+            logger.info(f"[BOOKING] Manual notification needed due to error: {message}")
     
     @staticmethod
     async def _extract_restaurant_from_message(message_text, restaurants, language):
