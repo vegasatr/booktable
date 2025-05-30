@@ -14,7 +14,7 @@
     "location_thanks": "Thank you! Now I know your location.",
     "area_question": "Choose area:",
     "area_selected": "Great, let's search in the {area} area. What would you like to eat today? I'll find a great option and book a table.",
-    "location_any_confirmed": "Okay, I'll search restaurants all over the island.",
+    "location_any_confirmed": "Alright, I'll look for restaurants across the island. What would you like today?",
     "location_error": "Sorry, I couldn't get your location. Please try again or choose another option.",
     "other_area_prompt": "Please specify the area or location you're interested in.",
     "choose_area_instruction": "Choose an area from the list or type a more precise location",
@@ -32,5 +32,18 @@
     "no_restaurants_in_budget": "In this price range, in this area, there's nothing I can confidently recommend. Try selecting another area or price level.",
     "button_reserve": "RESERVE",
     "button_question": "QUESTION",
-    "button_area": "AREA"
+    "button_area": "AREA",
+    "booking_which_restaurant": "Which restaurant shall we book a table at?",
+    "booking_time_question": "What time should I book the table for?",
+    "booking_custom_time": "The restaurant is open until {closing_time}. What time should I make the reservation for?",
+    "booking_guests_question": "For how many guests?",
+    "booking_date_question": "Are we booking for today, is that correct? Or would you prefer a different date?",
+    "booking_custom_date": "For which date should I book the table?",
+    "booking_confirmation": "Thank you, your table has been booked! The restaurant manager will contact you shortly via messenger to confirm the reservation. If you have any special requests, please let me know and I'll pass them on to the restaurant.",
+    "booking_instructions": "If you need my help with this reservation or would like to leave a review about the restaurant, please use the /support command in the menu. To make a new reservation, use /new_search. Enjoy your meal, and thank you for using our service!",
+    "booking_today": "TODAY",
+    "booking_tomorrow": "TOMORROW",
+    "booking_other_date": "OTHER",
+    "booking_other_time": "OTHER",
+    "support_message": "I'm here — how can I help you?"
 } 
