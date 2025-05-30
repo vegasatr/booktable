@@ -6,9 +6,15 @@
 # Этот скрипт ОБЯЗАТЕЛЬНО прогоняет все автоматические тесты
 # перед заливкой на GitHub. Заливка происходит ТОЛЬКО если все тесты прошли.
 #
+# ИСПРАВЛЕНИЯ v1.0.51:
+# - Добавлены таймауты для всех тестов (60-120 сек)
+# - Обработка зависших translation тестов
+# - Проверка существующих веток перед созданием новых
+# - Улучшенная обработка ошибок таймаута
+#
 # Порядок действий:
-# 1. Запуск всех unit тестов
-# 2. Запуск всех integration тестов  
+# 1. Запуск всех unit тестов (с таймаутами)
+# 2. Запуск всех integration тестов (с таймаутами)
 # 3. Если все тесты прошли -> git push
 # 4. Если тесты не прошли -> остановка с ошибкой
 #
@@ -48,7 +54,7 @@ unit_tests_failed=0
 
 # AI Core тесты
 echo "   └── AI Core tests..."
-python -m pytest tests/unit/test_ai_core.py -q --tb=no
+timeout 60 python -m pytest tests/unit/test_ai_core.py -q --tb=no
 if [ $? -ne 0 ]; then
     echo "       ❌ AI Core tests FAILED"
     unit_tests_failed=1
@@ -58,7 +64,7 @@ fi
 
 # Database тесты
 echo "   └── Database tests..."
-python -m pytest tests/unit/test_database_users.py -q --tb=no
+timeout 30 python -m pytest tests/unit/test_database_users.py -q --tb=no
 if [ $? -ne 0 ]; then
     echo "       ❌ Database tests FAILED"
     unit_tests_failed=1
@@ -68,8 +74,11 @@ fi
 
 # Translation тесты (допускаем legacy ошибки)
 echo "   └── Translation tests..."
-python -m pytest tests/unit/test_ai_translation.py -q --tb=no
-if [ $? -ne 0 ]; then
+timeout 60 python -m pytest tests/unit/test_ai_translation.py -q --tb=no
+test_result=$?
+if [ $test_result -eq 124 ]; then
+    echo "       ⚠️  Translation tests TIMEOUT (allowed for legacy issues)"
+elif [ $test_result -ne 0 ]; then
     echo "       ⚠️  Translation tests have legacy issues (allowed)"
 else
     echo "       ✅ Translation tests PASSED"
@@ -84,7 +93,7 @@ integration_tests_failed=0
 
 # Bot Workflow тесты
 echo "   └── Bot workflow integration..."
-python -m pytest tests/integration/test_bot_workflow.py -q --tb=no
+timeout 90 python -m pytest tests/integration/test_bot_workflow.py -q --tb=no
 if [ $? -ne 0 ]; then
     echo "       ❌ Bot workflow tests FAILED"
     integration_tests_failed=1
@@ -94,7 +103,7 @@ fi
 
 # External APIs тесты
 echo "   └── External APIs integration..."
-python -m pytest tests/integration/test_external_apis.py -q --tb=no
+timeout 60 python -m pytest tests/integration/test_external_apis.py -q --tb=no
 if [ $? -ne 0 ]; then
     echo "       ❌ External APIs tests FAILED"
     integration_tests_failed=1
@@ -104,7 +113,7 @@ fi
 
 # Edge Cases тесты
 echo "   └── Edge cases and error handling..."
-python -m pytest tests/integration/test_edge_cases.py -q --tb=no
+timeout 120 python -m pytest tests/integration/test_edge_cases.py -q --tb=no
 if [ $? -ne 0 ]; then
     echo "       ❌ Edge cases tests FAILED"
     integration_tests_failed=1
@@ -150,6 +159,10 @@ if [ $total_failed -eq 0 ]; then
     echo "📤 PUSHING TO GITHUB:"
     echo "===================="
     
+    # Проверяем текущую ветку
+    CURRENT_BRANCH=$(git branch --show-current)
+    BRANCH_NAME="v$NEW_VERSION"
+    
     # Добавляем изменения в git
     echo "   Adding changes to git..."
     git add .
@@ -157,10 +170,13 @@ if [ $total_failed -eq 0 ]; then
     echo "   Creating commit..."
     git commit -m "$commit_message"
     
-    # Создаем новую ветку с номером версии
-    BRANCH_NAME="v$NEW_VERSION"
-    echo "   Creating branch: $BRANCH_NAME"
-    git checkout -b "$BRANCH_NAME"
+    # Создаем новую ветку с номером версии только если её нет
+    if [ "$CURRENT_BRANCH" != "$BRANCH_NAME" ]; then
+        echo "   Creating branch: $BRANCH_NAME"
+        git checkout -b "$BRANCH_NAME"
+    else
+        echo "   Already on branch: $BRANCH_NAME"
+    fi
     
     echo "   Pushing to GitHub..."
     git push origin "$BRANCH_NAME"
