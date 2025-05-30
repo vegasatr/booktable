@@ -247,9 +247,16 @@ async def talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Основной обработчик текстовых сообщений"""
     user = update.effective_user
     text = update.message.text.strip()
-    language = context.user_data.get('language', 'en')
     
-    logger.info(f"[TALK] User {user.id} sent message: {text}")
+    # Определяем язык в самом начале
+    detected_lang = await detect_language(text)
+    language = context.user_data.get('language', detected_lang)
+    
+    # Если язык не установлен в контексте, устанавливаем определенный
+    if 'language' not in context.user_data:
+        context.user_data['language'] = language
+    
+    logger.info(f"[TALK] User {user.id} sent message: {text} (language: {language})")
     
     # Проверяем на ввод кастомного времени/даты для бронирования
     if await handle_custom_time_input(update, context):
@@ -273,9 +280,6 @@ async def talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.info(f"[TALK] User {user.username} sent message without budget selected, ignoring")
         return
 
-    detected_lang = await detect_language(text)
-    language = context.user_data.get('language', detected_lang)
-    
     logger.info("Processing message from %s: %s", user.username, text)
     
     # Если это первое сообщение после старта
@@ -286,14 +290,14 @@ async def talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             username=user.username,
             first_name=user.first_name,
             last_name=user.last_name,
-            language=detected_lang
+            language=language
         )
         logger.info(f"User saved to database")
         
         await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.TYPING)
         await asyncio.sleep(1)
         
-        welcome_message = await translate_message('welcome', detected_lang)
+        welcome_message = await translate_message('welcome', language)
         await update.message.reply_text(welcome_message)
         
         await show_budget_buttons(update, context)
@@ -363,6 +367,22 @@ async def new_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     
     # Получаем сохраненные предпочтения из базы
     preferences = get_user_preferences(user_id)
+    
+    # Восстанавливаем язык из базы данных
+    if preferences and preferences.get('language'):
+        context.user_data['language'] = preferences['language']
+        logger.info(f"[NEW_SEARCH] Language restored from DB: {preferences['language']}")
+    else:
+        # Если язык не найден в базе, пытаемся получить из профиля Telegram
+        user = update.effective_user
+        if hasattr(user, 'language_code') and user.language_code:
+            if user.language_code.startswith('ru'):
+                context.user_data['language'] = 'ru'
+            else:
+                context.user_data['language'] = 'en'
+        else:
+            context.user_data['language'] = 'ru'  # Дефолт для русского
+        logger.info(f"[NEW_SEARCH] Language set to default: {context.user_data['language']}")
     
     # Сохраняем только бюджет
     if preferences and preferences.get('budget'):

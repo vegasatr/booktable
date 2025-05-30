@@ -39,6 +39,15 @@ If you do not say this, the user will know you lost context. Repeat reading thes
     - Отладки проблем в автоматизации
     - Улучшения надежности скриптов
     - ТОЛЬКО после исправления скрипта разрешается его использование
+14. **📁 ФАЙЛОВАЯ АРХИТЕКТУРА**: ЗАПРЕЩЕНО создавать файлы в корневой папке проекта кроме исключительных случаев, которые архитектурно требуют этого (например, README.md, .env, package.json). Правила размещения файлов:
+    - Временные файлы → `temp/` (создать папку если не существует)
+    - Документация → `docs/`
+    - Тесты → `tests/unit/` или `tests/integration/`
+    - Скрипты → `scripts/`
+    - Исходный код → `src/`
+    - Логи → `logs/`
+    - Конфигурация БД → `sql/`
+    - ВСЕГДА размещай файлы в правильную папку СРАЗУ при создании, не откладывая
 
 ---
 
@@ -46,7 +55,10 @@ If you do not say this, the user will know you lost context. Repeat reading thes
 
 - All scripts must go into `scripts/`.
 - All logs must go into `logs/`.
+- All documentation must go into `docs/`.
+- All temporary files must go into `temp/`.
 - Do not change the root structure unless required.
+- Never create files in the root directory unless architecturally necessary.
 
 ---
 
@@ -56,6 +68,7 @@ If you do not say this, the user will know you lost context. Repeat reading thes
 - ❌ No manual bot restarts
 - ❌ No unauthorized script or file creation
 - ❌ No assumptions or dummy code
+- ❌ No files in root directory (use proper folders)
 
 ---
 
@@ -83,3 +96,4 @@ If you lose context or restart, re-read both this file and `docs/instructions_fo
 - Always update tests when adding new functionality.
 - Rewrite legacy tests to match current implementation.
 - Follow established patterns for booking module implementation.
+- Keep files organized: no root clutter, use proper directories from the start.

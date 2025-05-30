@@ -137,6 +137,8 @@ class BookingManager:
         """Спрашивает время бронирования"""
         language = context.user_data.get('language', 'en')
         
+        logger.info(f"[BOOKING] _ask_for_time: language={language}, user_data keys: {list(context.user_data.keys())}")
+        
         question = await translate_message('booking_time_question', language)
         
         # Генерируем варианты времени (через 15 минут от текущего + 4 слота по 30 мин)
