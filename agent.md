@@ -63,6 +63,14 @@ If you do not say this, the user will know you lost context. Repeat reading thes
     - No need to fight with terminal or wait for completion
     - If script has detailed logging to files, mention the log file location
     - NEVER run scripts silently or without showing progress
+17. **🖥️ TERMINAL USAGE**: ALWAYS use the existing user terminal. NEVER create new terminals or switch terminals:
+    - Use the current bash terminal that is already open **in Cursor chat context**
+    - The user's terminal has virtual environment activated: `(venv) root@bftkmadaog:~/booktable_bot#`
+    - Working directory is already set: `/root/booktable_bot`
+    - **This terminal is integrated into Cursor interface and available directly**
+    - Execute commands immediately without waiting for user confirmation
+    - Use `is_background=false` for commands that need immediate execution
+    - Only use `is_background=true` for long-running processes like scripts with `&`
 
 ---
 
@@ -84,6 +92,7 @@ If you do not say this, the user will know you lost context. Repeat reading thes
 - ❌ No unauthorized script or file creation
 - ❌ No assumptions or dummy code
 - ❌ No files in root directory (use proper folders)
+- ❌ No creating new terminals or switching terminals
 
 ---
 
@@ -113,3 +122,4 @@ If you lose context or restart, re-read both this file and `docs/instructions_fo
 - Follow established patterns for booking module implementation.
 - Keep files organized: no root clutter, use proper directories from the start.
 - Use only `scripts/db_tool.py` for all database operations.
+- Work in ONE terminal session, execute commands immediately.
