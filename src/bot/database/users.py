@@ -8,7 +8,7 @@ from .connection import get_db_connection
 logger = logging.getLogger(__name__)
 
 def save_user_to_db(user_id, username, first_name, last_name, language):
-    """Сохраняет пользователя в базу данных"""
+    """Сохраняет пользователя в базу данных. Возвращает True при успехе, False при ошибке"""
     conn = None
     cur = None
     try:
@@ -57,14 +57,14 @@ def save_user_to_db(user_id, username, first_name, last_name, language):
         
         conn.commit()
         logger.info(f"Transaction committed successfully")
-        return client_number
+        return True  # Возвращаем True при успехе
     except Exception as e:
         if conn:
             conn.rollback()
             logger.info("Transaction rolled back due to error")
         logger.error(f"Error saving user to database: {e}")
-        logger.exception("Full traceback:")
-        raise
+        logger.error("Full traceback:")
+        return False  # Возвращаем False при ошибке
     finally:
         if cur:
             cur.close()
@@ -73,7 +73,11 @@ def save_user_to_db(user_id, username, first_name, last_name, language):
             conn.close()
 
 def save_user_preferences(user_id, preferences):
-    """Сохраняет предпочтения пользователя в базу данных"""
+    """Сохраняет предпочтения пользователя в базу данных. Возвращает True при успехе, False при ошибке"""
+    if preferences is None:
+        logger.warning(f"[DB] Cannot save None preferences for user {user_id}")
+        return False
+        
     conn = None
     cur = None
     try:
@@ -98,11 +102,12 @@ def save_user_preferences(user_id, preferences):
         
         conn.commit()
         logger.info(f"[DB] Saved preferences for user {user_id}: {preferences}")
+        return True
     except Exception as e:
         if conn:
             conn.rollback()
         logger.error(f"[DB] Error saving preferences: {e}")
-        raise
+        return False
     finally:
         if cur:
             cur.close()
@@ -119,7 +124,7 @@ def get_user_preferences(user_id):
         
         # Получаем предпочтения пользователя
         select_query = """
-            SELECT budget, last_search_area, last_search_location
+            SELECT budget, last_search_area, last_search_location, language
             FROM users
             WHERE telegram_user_id = %s
         """
@@ -129,8 +134,9 @@ def get_user_preferences(user_id):
         if result:
             preferences = {
                 'budget': result['budget'],
-                'area': result['last_search_area'],
-                'location': result['last_search_location']
+                'area': result['last_search_area'], 
+                'location': result['last_search_location'],
+                'language': result['language']
             }
             logger.info(f"[DB] Retrieved preferences for user {user_id}: {preferences}")
             return preferences

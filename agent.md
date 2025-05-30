@@ -18,14 +18,16 @@ If you do not say this, the user will know you lost context. Repeat reading thes
 
 ## 🧠 Mandatory AI Behavior
 
-1. Always restart the bot after code changes using `start_bot.sh`.
-2. Never run Git commands manually. Use `git_push.sh` to push updates.
+1. Always restart the bot after code changes using `scripts/start_bot.sh`.
+2. Never run Git commands manually. Use `scripts/git_push.sh` to push updates.
 3. You are responsible for debugging. Use logging automatically and proactively.
 4. Read and understand `main.py` and other code before making assumptions.
 5. Use `scripts/check_db.sh` to test database access.
 6. Always respond to the user in Russian language only.
 7. Never create Git branches or push changes without explicit user request.
-8. Если пользователь пишет "откат", запусти скрипт 'otkat.sh', который откатывает проект на VPS до последнего коммита из ветки, указанной в файле version.txt.
+8. Если пользователь пишет "откат", запусти скрипт 'scripts/otkat.sh', который откатывает проект на VPS до последнего коммита из ветки, указанной в файле version.txt.
+9. **ОБЯЗАТЕЛЬНО**: После создания нового функционала обязательно дорабатывай автоматические тесты (unit и integration) для покрытия новой функциональности. Без тестов функционал считается незавершенным.
+10. **LEGACY ТЕСТЫ**: Если старые тесты не подходят под новую реализацию кода (изменилась архитектура, логика, API), то ОБЯЗАТЕЛЬНО переписывай эти тесты под актуальную реализацию. Устаревшие тесты должны быть обновлены, а не игнорироваться.
 
 ---
 
@@ -67,3 +69,5 @@ If you lose context or restart, re-read both this file and `instructions_for_ai.
 - You develop, debug, and maintain the code.
 - The user provides direction only.
 - Use scripts only. Respect structure. Confirm startup instructions are followed.
+- Always update tests when adding new functionality.
+- Rewrite legacy tests to match current implementation.
