@@ -13,6 +13,15 @@ if [ -f .env ]; then
     echo "$(date): .env loaded"
 fi
 
+# Очистка зависших процессов перед запуском
+echo "$(date): Running cleanup of hung processes..."
+if [ -f "scripts/cleanup_hung_processes.sh" ]; then
+    bash scripts/cleanup_hung_processes.sh
+    echo "$(date): Cleanup completed"
+else
+    echo "$(date): Warning: cleanup_hung_processes.sh not found, skipping cleanup"
+fi
+
 # Функция для проверки статуса
 check_status() {
     if [ $? -eq 0 ]; then
@@ -126,6 +135,10 @@ echo "   📺 Подключиться: tmux attach -t booktable"
 echo "   🔄 Основной бот: tmux select-window -t booktable:main_bot"
 echo "   📋 Бот менеджеров: tmux select-window -t booktable:managers_bot"
 echo "   ⛔ Остановить все: tmux kill-session -t booktable"
+echo ""
+echo "🧹 Обслуживание системы:"
+echo "   🔧 Очистка зависших процессов: ./scripts/cleanup_hung_processes.sh"
+echo "   📊 Статус системы: ./scripts/status_bot.sh"
 echo ""
 echo "📊 Логи:"
 echo "   📝 Основной бот: tail -f logs/bot.log"

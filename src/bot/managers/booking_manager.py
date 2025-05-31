@@ -495,14 +495,7 @@ class BookingManager:
             # Используем бот менеджеров для отправки
             managers_bot = Bot(token=BOOKINGS_BOT_TOKEN)
             
-            # Находим всех менеджеров этого ресторана по базе данных
-            conn = get_db_connection()
-            cur = conn.cursor(cursor_factory=DictCursor)
-            
-            # Получаем всех авторизованных менеджеров для этого ресторана
-            # Это будет реализовано когда менеджеры подключатся к боту
-            # Пока логируем что уведомление готово
-            logger.info(f"[BOOKING] Managers bot notification prepared for {restaurant_name}: {message}")
+            logger.info(f"[BOOKING] Trying to send notification via managers bot for {restaurant_name}")
             
             # Пытаемся отправить напрямую по контакту если это @username
             if contact and contact.startswith('@'):
@@ -516,9 +509,57 @@ class BookingManager:
                     logger.warning(f"[BOOKING] Failed to send to @{username} via managers bot: {e}")
                     return False
             
-            cur.close()
-            conn.close()
-            return True
+            # Проверяем формат контакта начинающегося с =
+            elif contact and contact.startswith('=@'):
+                username = contact[2:]  # убираем =@
+                try:
+                    chat = await managers_bot.get_chat(username)
+                    await managers_bot.send_message(chat_id=chat.id, text=message)
+                    logger.info(f"[BOOKING] Notification sent to @{username} via managers bot for booking #{booking_number}")
+                    return True
+                except Exception as e:
+                    logger.warning(f"[BOOKING] Failed to send to @{username} via managers bot: {e}")
+                    return False
+            
+            # Если контакт в другом формате - пытаемся интерпретировать как username или chat_id
+            elif contact:
+                clean_contact = contact.strip()
+                
+                # Убираем префикс = если есть
+                if clean_contact.startswith('='):
+                    clean_contact = clean_contact[1:]
+                
+                # Если это username (начинается с @)
+                if clean_contact.startswith('@'):
+                    username = clean_contact[1:]
+                    try:
+                        chat = await managers_bot.get_chat(username)
+                        await managers_bot.send_message(chat_id=chat.id, text=message)
+                        logger.info(f"[BOOKING] Notification sent to @{username} via managers bot for booking #{booking_number}")
+                        return True
+                    except Exception as e:
+                        logger.warning(f"[BOOKING] Failed to send to @{username} via managers bot: {e}")
+                        return False
+                
+                # Если это числовой chat_id
+                elif clean_contact.isdigit():
+                    try:
+                        chat_id = int(clean_contact)
+                        await managers_bot.send_message(chat_id=chat_id, text=message)
+                        logger.info(f"[BOOKING] Notification sent to chat_id {chat_id} via managers bot for booking #{booking_number}")
+                        return True
+                    except Exception as e:
+                        logger.warning(f"[BOOKING] Failed to send to chat_id {chat_id} via managers bot: {e}")
+                        return False
+                
+                # Неизвестный формат контакта
+                else:
+                    logger.warning(f"[BOOKING] Unknown contact format: {contact}")
+                    return False
+            
+            else:
+                logger.warning(f"[BOOKING] No contact provided for restaurant {restaurant_name}")
+                return False
             
         except Exception as e:
             logger.error(f"[BOOKING] Error sending via managers bot: {e}")

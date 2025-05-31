@@ -209,8 +209,9 @@ async def location_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         msg = await translate_message('location_any_confirmed', language)
         await context.bot.send_message(chat_id=chat_id, text=msg)
         
-        # Начинаем диалог с AI
-        q = "Пользователь выбрал язык, бюджет и любое место на острове. Начни диалог." if language == 'ru' else "User selected language, budget and any location on the island. Start the conversation."
+        # Начинаем диалог с AI, передавая информацию о бюджете
+        budget = context.user_data.get('budget', '$')
+        q = f"Пользователь выбрал язык русский, бюджет {budget} и любое место на острове Пхукет. Начни диалог о ресторанах." if language == 'ru' else f"User selected language English, budget {budget} and any location on Phuket island. Start the conversation about restaurants."
         try:
             chat_log = context.user_data.get('chat_log', [])
             a, chat_log = await ask(q, chat_log, language)
@@ -285,6 +286,49 @@ async def talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     logger.info("Processing message from %s: %s", user.username, text)
     
+    # Удаляем кнопки из приветственного сообщения при первом сообщении пользователя
+    consultation_welcome_message_id = context.user_data.get('consultation_welcome_message_id')
+    if consultation_welcome_message_id:
+        try:
+            # Получаем текст приветственного сообщения
+            welcome_msg = await translate_message('consultation_welcome', context.user_data.get('language', 'ru'))
+            # Редактируем сообщение, убирая кнопки, но оставляя текст
+            await context.bot.edit_message_text(
+                chat_id=update.effective_chat.id,
+                message_id=consultation_welcome_message_id,
+                text=welcome_msg
+            )
+            logger.info(f"[TALK] Removed buttons from consultation welcome message {consultation_welcome_message_id}")
+            # Удаляем ID из контекста, чтобы не повторять операцию
+            context.user_data.pop('consultation_welcome_message_id', None)
+        except Exception as e:
+            logger.error(f"[TALK] Error removing buttons from welcome message: {e}")
+            # Удаляем ID из контекста даже при ошибке
+            context.user_data.pop('consultation_welcome_message_id', None)
+
+    # Удаляем кнопки из предыдущего сообщения бота (если есть)
+    last_bot_message_id = context.user_data.get('last_bot_message_with_buttons')
+    if last_bot_message_id:
+        try:
+            # Получаем текст предыдущего сообщения из контекста
+            last_bot_message_text = context.user_data.get('last_bot_message_text', '')
+            if last_bot_message_text:
+                # Редактируем сообщение, убирая кнопки, но оставляя текст
+                await context.bot.edit_message_text(
+                    chat_id=update.effective_chat.id,
+                    message_id=last_bot_message_id,
+                    text=last_bot_message_text
+                )
+                logger.info(f"[TALK] Removed buttons from previous bot message {last_bot_message_id}")
+            # Удаляем ID из контекста
+            context.user_data.pop('last_bot_message_with_buttons', None)
+            context.user_data.pop('last_bot_message_text', None)
+        except Exception as e:
+            logger.error(f"[TALK] Error removing buttons from previous bot message: {e}")
+            # Удаляем ID из контекста даже при ошибке
+            context.user_data.pop('last_bot_message_with_buttons', None)
+            context.user_data.pop('last_bot_message_text', None)
+    
     # Если это первое сообщение после старта
     if context.user_data.get('awaiting_language'):
         context.user_data['awaiting_language'] = False
@@ -344,16 +388,103 @@ async def talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await show_location_selection(update, context)
         return
     
-    # Отправляем в AI для обработки
+    # Проверяем, хочет ли пользователь сменить район
+    detected_area = await detect_area_from_text(text, language)
+    if detected_area:
+        logger.info(f"[TALK] User wants to change area to: {detected_area}")
+        area_name = PHUKET_AREAS[detected_area]
+        context.user_data['location'] = {'area': detected_area, 'name': area_name}
+        
+        # Показываем рестораны в новом районе
+        await show_restaurants(update, context)
+        return
+
+    # Определяем тип вопроса: о ресторанах или отвлеченный
+    is_restaurant_question = await is_about_restaurants(text)
+    logger.info(f"[TALK] Question type: {'restaurant' if is_restaurant_question else 'general'}")
+
+    # Если вопрос о ресторанах
+    if is_restaurant_question:
+        await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.TYPING)
+        await asyncio.sleep(1)
+        
+        # Получаем данные о ресторанах из контекста (если есть)
+        restaurants = context.user_data.get('filtered_restaurants', [])
+        restaurant_info = context.user_data.get('restaurant_info', '')
+        
+        # Проверяем, хочет ли пользователь сменить район (только если есть отфильтрованные рестораны)
+        if restaurants and any(word in text.lower() for word in ['другой район', 'сменить район', 'не подходит', 'не нравится', 'не хочу']):
+            context.user_data['in_restaurant_qa'] = False
+            keyboard = [[
+                InlineKeyboardButton("РЯДОМ", callback_data='location_near'),
+                InlineKeyboardButton("РАЙОН", callback_data='location_area'),
+                InlineKeyboardButton("ВЕЗДЕ", callback_data='location_any')
+            ]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text("Хорошо, давайте подберем ресторан в другом районе!", reply_markup=reply_markup)
+            return
+
+        # Используем функцию restaurant_chat с AI-контекстным процессором для всех вопросов о ресторанах
+        try:
+            response = await restaurant_chat(text, restaurant_info, language, context)
+            
+            # Создаем кнопки действий для ресторанных вопросов
+            button_reserve = await translate_message('button_reserve', language)
+            button_question = await translate_message('button_question', language)
+            button_area = await translate_message('button_area', language)
+            
+            keyboard = [
+                [
+                    InlineKeyboardButton(button_reserve, callback_data="book_restaurant"),
+                    InlineKeyboardButton(button_question, callback_data="ask_about_restaurant"),
+                    InlineKeyboardButton(button_area, callback_data="location_area")
+                ]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            # Отправляем ответ с кнопками и сохраняем ID сообщения
+            bot_message = await update.message.reply_text(response, reply_markup=reply_markup)
+            
+            # Сохраняем ID и текст сообщения для последующего удаления кнопок
+            context.user_data['last_bot_message_with_buttons'] = bot_message.message_id
+            context.user_data['last_bot_message_text'] = response
+            logger.info(f"[TALK] Saved bot message ID {bot_message.message_id} for restaurant response")
+        except Exception as e:
+            logger.error(f"Error in restaurant_chat: {e}")
+            error_msg = await translate_message('error', language)
+            await update.message.reply_text(error_msg)
+        return
+
+    # Для всех остальных случаев - используем общий диалог без данных о ресторанах
     await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.TYPING)
     await asyncio.sleep(1)
     
     try:
-        response, chat_log = await ask(text, context.user_data.get('chat_log'), language)
-        context.user_data['chat_log'] = chat_log
-        await update.message.reply_text(response)
+        response = await general_chat(text, language)
+        
+        # Создаем кнопки действий для общего диалога
+        button_reserve = await translate_message('button_reserve', language)
+        button_question = await translate_message('button_question', language)
+        button_area = await translate_message('button_area', language)
+        
+        keyboard = [
+            [
+                InlineKeyboardButton(button_reserve, callback_data="book_restaurant"),
+                InlineKeyboardButton(button_question, callback_data="ask_about_restaurant"),
+                InlineKeyboardButton(button_area, callback_data="location_area")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        # Отправляем ответ с кнопками и сохраняем ID сообщения
+        bot_message = await update.message.reply_text(response, reply_markup=reply_markup)
+        
+        # Сохраняем ID и текст сообщения для последующего удаления кнопок
+        context.user_data['last_bot_message_with_buttons'] = bot_message.message_id
+        context.user_data['last_bot_message_text'] = response
+        logger.info(f"[TALK] Saved bot message ID {bot_message.message_id} for general response")
     except Exception as e:
-        logger.error(f"Error in talk: {e}")
+        logger.error(f"Error in general_chat: {e}")
         error_msg = await translate_message('error', language)
         await update.message.reply_text(error_msg)
 

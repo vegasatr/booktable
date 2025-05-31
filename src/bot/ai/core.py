@@ -80,12 +80,16 @@ async def ask(text, chat_log=None, language='en'):
     Возвращает (ответ, обновлённый chat_log).
     """
     try:
-        answer = await ai_generate('restaurant_recommendation', text=text, target_language=language, context_log=chat_log)
+        # Передаем text как preferences в ai_generate
+        answer = await ai_generate('restaurant_recommendation', preferences=text, target_language=language, context_log=chat_log)
         # chat_log не обновляем, т.к. ai_generate не ведёт историю
         return answer, chat_log or []
     except Exception as e:
         logger.error(f"Error in ask: {e}")
-        return await ai_generate('fallback_error', target_language=language), chat_log or []
+        if language == 'ru':
+            return "Извините, произошла ошибка. Попробуйте ещё раз.", chat_log or []
+        else:
+            return "Sorry, an error occurred. Please try again.", chat_log or []
 
 async def restaurant_chat(question, restaurant_info, language, context=None):
     """
